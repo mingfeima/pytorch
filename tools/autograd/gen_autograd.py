@@ -32,6 +32,12 @@ HARDCODED_DIFFERENTIABLE_OUTPUTS = {
     #   2 => cy
     #   3 => reserve
     #   4 => weight_buf
+    '_mkldnn_rnn': (0, 1, 2),
+    # _mkldnn_rnn outputs:
+    #   0 => output
+    #   1 => hy
+    #   2 => cy
+    #   3 => reserve
 }
 
 
