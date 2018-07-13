@@ -50,6 +50,7 @@ public:
     return *generator;
   }
   bool hasMKL() const;
+  bool hasMKLDNN() const;
   bool hasCUDA() const {
     return detail::getCUDAHooks().hasCUDA();
   }
@@ -94,6 +95,8 @@ public:
   void setBenchmarkCuDNN(bool);
   bool deterministicCuDNN() const;
   void setDeterministicCuDNN(bool);
+  bool userEnabledMKLDNN() const;
+  void setUserEnabledMKLDNN(bool e);
   std::unique_ptr<Generator>
     generator_registry[static_cast<int>(Backend::NumOptions)];
 private:
@@ -110,6 +113,7 @@ private:
   bool enabled_cudnn = true;
   bool deterministic_cudnn = false;
   bool benchmark_cudnn = false;
+  bool enabled_mkldnn = true;
   std::atomic<size_t> next_id;
   std::unique_ptr<THCState, void(*)(THCState*)> thc_state;
   friend struct Type;
@@ -150,6 +154,10 @@ static inline bool hasCuDNN() {
 
 static inline bool hasMKL() {
   return globalContext().hasMKL();
+}
+
+static inline bool hasMKLDNN() {
+  return globalContext().hasMKLDNN();
 }
 
 static inline int64_t current_device() {

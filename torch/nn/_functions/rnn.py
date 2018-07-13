@@ -1,6 +1,7 @@
 import warnings
 from torch.autograd import NestedIOFunction
 import torch.backends.cudnn as cudnn
+import torch.backends.mkldnn as mkldnn
 from .. import functional as F
 import torch
 from .thnn import rnnFusedPointwise as fusedBackend
@@ -294,12 +295,43 @@ def CudnnRNN(mode, input_size, hidden_size, num_layers=1,
 
     return forward
 
+def MkldnnRNN(mode, input_size, hidden_size, num_layers=1,
+              batch_first=False, dropout=0, train=True, bidirectional=False,
+              variable_length=False, dropout_state=None, flat_weight=None):
+
+    mode = mkldnn.get_rnn_mode(mode)
+
+    def forward(input, weight, hx, batch_sizes):
+        if mode == mkldnn.MKLDNN_LSTM:
+            hx, cx = hx
+        else:
+            cx = None
+
+        weight_arr = list(itertools.chain.from_iterable(weight))
+        weight_stride0 = len(weight[0])
+
+        output, hy, cy, reserve = torch._mkldnn_rnn(
+            input, weight_arr, weight_stride0,
+            hx, cx,
+            mode, hidden_size, num_layers,
+            batch_first, train, bool(bidirectional),
+            list(batch_sizes.data) if variable_length else ())
+
+        if cx is not None:
+            return (output, (hy, cy))
+        else:
+            return (output, hy)
+
+    return forward
+
 
 def RNN(*args, **kwargs):
 
     def forward(input, *fargs, **fkwargs):
         if cudnn.is_acceptable(input.data):
             func = CudnnRNN(*args, **kwargs)
+        elif mkldnn.is_acceptable(input.data) and mkldnn.is_rnn_acceptable(*args, **kwargs):
+            func = MkldnnRNN(*args, **kwargs)
         else:
             func = AutogradRNN(*args, **kwargs)
 
