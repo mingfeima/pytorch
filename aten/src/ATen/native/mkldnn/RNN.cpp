@@ -150,27 +150,200 @@ namespace {
 
   std::vector<int64_t> _reserve_size(const RNNDescriptorParams& rnn, const TensorDescriptorListParams& tensors) {
     int64_t factor = (rnn.mode == MKLDNN_LSTM) ? 4 : 5;
-    return {rnn.num_layers, rnn.num_directions(), tensors.seq_length, tensors.mini_batch, factor * rnn.hidden_size};
+    return {rnn.num_layers * rnn.num_directions(), tensors.seq_length, tensors.mini_batch, factor * rnn.hidden_size};
   }
 
-  Tensor _rnn_layer_forward(const RNNParams& fn, const Tensor& input, const Tensor& hx, const Tensor& cx,
-    const Tensor& weight_ih, const Tensor& weight_hh, const Tensor& bias_ih, const Tensor& bias_hh,
-    Tensor& hy, Tensor& cy, bool reverse)
+  template<typename DType>
+  inline DType sigm(DType x) { return 1.0f / (1.0f + std::exp(-x)); }
+
+  template<typename DType>
+  void GRUCell_forward(const Tensor& inputWeight1, const Tensor& hiddenWeight2,
+    const Tensor& bias1, const Tensor& bias2, const Tensor& hx, Tensor& hy,
+    Tensor& reserve, bool train)
   {
+    auto has_bias = bias1.defined();
+
+    auto hsz = hx.size(1);
+    auto count = hy.numel();
+
+    DType *inputWeight1_p = (DType*)inputWeight1.data_ptr();
+    DType *hiddenWeight2_p = (DType*)hiddenWeight2.data_ptr();
+    DType *bias1_p = has_bias ? (DType*)bias1.data_ptr() : NULL;
+    DType *bias2_p = has_bias ? (DType*)bias2.data_ptr() : NULL;
+    DType *hx_p = (DType*)hx.data_ptr();
+    DType *hy_p = (DType*)hy.data_ptr();
+    DType *reserve_p = train ? (DType*)reserve.data_ptr() : NULL;
+
+    #pragma omp parallel for
+    for (size_t index = 0; index < count; index++) {
+      size_t offset = (index/hsz)*3*hsz+index%hsz;
+      size_t offset_s = (index/hsz)*5*hsz+index%hsz;
+
+      DType ir = inputWeight1_p[offset+0*hsz];
+      DType ii = inputWeight1_p[offset+1*hsz];
+      DType in = inputWeight1_p[offset+2*hsz];
+      DType hr = hiddenWeight2_p[offset+0*hsz];
+      DType hi = hiddenWeight2_p[offset+1*hsz];
+      DType hn = hiddenWeight2_p[offset+2*hsz];
+
+      DType hx_ = hx_p[index];
+      DType *hy_ = &hy_p[index];
+
+      DType b1r, b1i, b1n, b2r, b2i, b2n;
+      b1r = has_bias ? bias1_p[index%hsz+0*hsz] : static_cast<DType>(0);
+      b1i = has_bias ? bias1_p[index%hsz+1*hsz] : static_cast<DType>(0);
+      b1n = has_bias ? bias1_p[index%hsz+2*hsz] : static_cast<DType>(0);
+      b2r = has_bias ? bias2_p[index%hsz+0*hsz] : static_cast<DType>(0);
+      b2i = has_bias ? bias2_p[index%hsz+1*hsz] : static_cast<DType>(0);
+      b2n = has_bias ? bias2_p[index%hsz+2*hsz] : static_cast<DType>(0);
+
+      DType rg, ig, ng;
+      rg = ir + hr + b1r + b2r;
+      ig = ii + hi + b1i + b2i;
+      rg = sigm<DType>(rg);
+      ig = sigm<DType>(ig);
+      ng = in + b1n + rg*(hn+b2n);
+      ng = std::tanh(ng);
+
+      *hy_ = ng + ig * (hx_-ng);
+
+      if (train) {
+        //SAVE FOR BACKWARDS
+        reserve_p[offset_s+0*hsz] = rg;
+        reserve_p[offset_s+1*hsz] = ig;
+        reserve_p[offset_s+2*hsz] = ng;
+        reserve_p[offset_s+3*hsz] = hx_;
+        reserve_p[offset_s+4*hsz] = hn + b2n;
+      }
+    }
+  }
+
+  template<typename DType>
+  void LSTMCell_forward(const Tensor& inputWeight1, const Tensor& hiddenWeight2,
+    const Tensor& bias1, const Tensor& bias2, const Tensor& cx, Tensor& hy, Tensor& cy,
+    Tensor& reserve, bool train)
+  {
+    auto has_bias = bias1.defined();
+
+    auto hsz = cx.size(1);
+    auto count = hy.numel();
+
+    DType *inputWeight1_p = (DType*)inputWeight1.data_ptr();
+    DType *hiddenWeight2_p = (DType*)hiddenWeight2.data_ptr();
+    DType *bias1_p = has_bias ? (DType*)bias1.data_ptr() : NULL;
+    DType *bias2_p = has_bias ? (DType*)bias2.data_ptr() : NULL;
+    DType *cx_p = (DType*)cx.data_ptr();
+    DType *hy_p = (DType*)hy.data_ptr();
+    DType *cy_p = (DType*)cy.data_ptr();
+    DType *reserve_p = train ? (DType*)reserve.data_ptr() : NULL;
+
+    #pragma omp parallel for
+    for (size_t index = 0; index < count; index++) {
+      size_t offset = (index/hsz)*4*hsz+index%hsz;
+
+      DType iig = inputWeight1_p[offset+0*hsz];
+      DType ifg = inputWeight1_p[offset+1*hsz];
+      DType icg = inputWeight1_p[offset+2*hsz];
+      DType iog = inputWeight1_p[offset+3*hsz];
+
+      DType hig = hiddenWeight2_p[offset+0*hsz];
+      DType hfg = hiddenWeight2_p[offset+1*hsz];
+      DType hcg = hiddenWeight2_p[offset+2*hsz];
+      DType hog = hiddenWeight2_p[offset+3*hsz];
+
+      DType cx_ = cx_p[index];
+      DType *hy_ = &hy_p[index];
+      DType *cy_ = &cy_p[index];
+
+      DType b1i, b1f, b1c, b1o, b2i, b2f, b2c, b2o;
+      b1i = has_bias ? bias1_p[index%hsz+0*hsz] : static_cast<DType>(0);
+      b1f = has_bias ? bias1_p[index%hsz+1*hsz] : static_cast<DType>(0);
+      b1c = has_bias ? bias1_p[index%hsz+2*hsz] : static_cast<DType>(0);
+      b1o = has_bias ? bias1_p[index%hsz+3*hsz] : static_cast<DType>(0);
+      b2i = has_bias ? bias2_p[index%hsz+0*hsz] : static_cast<DType>(0);
+      b2f = has_bias ? bias2_p[index%hsz+1*hsz] : static_cast<DType>(0);
+      b2c = has_bias ? bias2_p[index%hsz+2*hsz] : static_cast<DType>(0);
+      b2o = has_bias ? bias2_p[index%hsz+3*hsz] : static_cast<DType>(0);
+
+      DType ig, fg, cg, og;
+      ig = iig + hig + b1i + b2i;
+      fg = ifg + hfg + b1f + b2f;
+      cg = icg + hcg + b1c + b2c;
+      og = iog + hog + b1o + b2o;
+
+      ig = sigm(ig);
+      fg = sigm(fg);
+      cg = std::tanh(cg);
+      og = sigm(og);
+
+      *cy_ = (fg * cx_) + (ig * cg);
+      *hy_ = og * std::tanh(*cy_);
+
+      if (train) {
+        //SAVE FOR BACKWARDS
+        reserve_p[offset+0*hsz] = ig;
+        reserve_p[offset+1*hsz] = fg;
+        reserve_p[offset+2*hsz] = cg;
+        reserve_p[offset+3*hsz] = og;
+      }
+    }
+  }
+
+  Tensor _rnn_layer_forward(const RNNParams& fn, const Tensor& input, TensorList weights,
+    const Tensor& hx, const Tensor& cx, Tensor& hy, Tensor& cy, Tensor& reserve,
+    bool train, bool reverse)
+  {
+    auto has_bias = (weights.size() == 4);
+
+    auto weight1 = weights[0];
+    auto weight2 = weights[1];
+    auto bias1 = has_bias ? weights[2] : Tensor();
+    auto bias2 = has_bias ? weights[3] : Tensor();
+
     auto mode = fn.rnn.mode;
-    auto seq_length = fn.tensors.seq_length;
-    auto mini_batch = fn.tensors.mini_batch;
-    auto hidden_size = fn.rnn.hidden_size;
+    auto seq_length = input.size(0);
+    auto mini_batch = input.size(1);
+    auto input_size = input.size(2);
+    auto gate_size = weight2.size(0);
+    auto hidden_size = weight2.size(1);
 
+    // NB: output per layer per direction
     auto output = input.type().tensor({seq_length, mini_batch, hidden_size});
+    // NB: fuse xW from each timestep
+    auto inputWeight1 = input.view({-1, input_size}).matmul(weight1.t()).view({seq_length, mini_batch, gate_size});
 
+    auto hx_t = hx;
+    auto cx_t = cx;
+    for (size_t t = 0; t < seq_length; t++) {
+      size_t ts = (reverse) ? (seq_length-t-1) : t;
+      auto inputWeight1_t = inputWeight1[ts];
+      auto hiddenWeight2_t = hx_t.matmul(weight2.t());
+      AT_ASSERTM(inputWeight1_t.sizes().equals(hiddenWeight2_t.sizes()),
+        "input weight product and hidden weight product mismatch")
+      auto hy_t = output[ts];
+      auto cy_t = cx.defined() ? cx.type().zeros_like(cx) : hx.type().tensor();
+      auto reserve_t = train ? reserve[ts] : hx.type().tensor();
 
+      if (mode == MKLDNN_LSTM) {
+        LSTMCell_forward<float>(inputWeight1_t, hiddenWeight2_t, bias1, bias2, cx_t, hy_t, cy_t, reserve_t, train);
+      } else if (mode == MKLDNN_GRU) {
+        GRUCell_forward<float>(inputWeight1_t, hiddenWeight2_t, bias1, bias2, hx_t, hy_t, reserve_t, train);
+      } else {
+        throw std::runtime_error("MKLDNN unsupported RNN mode");
+      }
+      // NB: update hidden/cell state for next time step
+      hx_t = hy_t;
+      cx_t = cy_t;
+    }
+    // NB: update hy/cy for the final time step
+    hy.copy_(hx_t);
+    cy.copy_(cx_t);
 
-    throw std::runtime_error("_rnn_layer_forward");
     return output;
   }
 
-  void _rnn_layer_backward(void) {
+  void _rnn_layer_backward(void)
+  {
     std::cout << "_rnn_layer_backward" << std::endl;
   }
 } // anonymous namespace
@@ -202,6 +375,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
 
   auto hidden_size = _hidden_size(fn.rnn, fn.tensors);
   auto output_size = _output_size(fn.rnn, fn.tensors);
+  auto reserve_size = _reserve_size(fn.rnn, fn.tensors);
 
   if (!hx.is_contiguous()) {
     throw std::runtime_error("rnn: hx is not contiguous");
@@ -214,8 +388,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
   input = input.contiguous();
   auto output = input.type().tensor(output_size);
   auto hy = hx.type().tensor(hidden_size);
+  // NB: Not allowed to return undefined tensors
   auto cy = cx.defined() ? cx.type().tensor(hidden_size) : hx.type().tensor();
-  auto reserve = hx.
+  auto reserve = fn_train ? hx.type().tensor(reserve_size) : hx.type().tensor();
 
   MatrixRef<Tensor> weights{weight, static_cast<size_t>(weight_stride0)};
 
@@ -227,41 +402,28 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
   for (size_t layer = 0; layer < num_layers; layer++) {
     std::vector<Tensor> layer_output(num_directions);
     for (size_t direction = 0; direction < num_directions; direction++) {
-      auto layer_weights = weights[layer * num_directions + direction];
+      auto index = layer * num_directions + direction;
 
-      Tensor weight_ih, weight_hh, bias_ih, bias_hh;
-      weight_ih = layer_weights[0];
-      weight_hh = layer_weights[1];
-      if (has_bias) {
-        // TODO test if works
-        bias_ih = layer_weights[2];
-        bias_hh = layer_weights[3];
-      }
-
-      auto layer_hx = hx[layer][direction];
-      auto layer_hy = hy[layer][direction];
-      auto layer_cx = cx.defined() ? cx[layer][direction] : hx.type().tensor();
-      auto layer_cy = cx.defined() ? cy[layer][direction] : hx.type().tensor();
+      auto layer_weights = weights[index];
+      auto layer_hx = hx[index];
+      auto layer_hy = hy[index];
+      auto layer_cx = cx.defined() ? cx[index] : hx.type().tensor();
+      auto layer_cy = cx.defined() ? cy[index] : hx.type().tensor();
+      auto layer_reserve = fn_train ? reserve[index] : hx.type().tensor();
 
       auto reverse = (direction > 0);
-      layer_output[direction] = _rnn_layer_forward(fn, layer_input, layer_hx, layer_cx,
-        weight_ih, weight_hh, bias_ih, bias_hh, layer_hy, layer_cy, reverse);
-
-
-
+      layer_output[direction] = _rnn_layer_forward(fn, layer_input, layer_weights,
+         layer_hx, layer_cx, layer_hy, layer_cy, layer_reserve, fn_train, reverse);
     }
     layer_input = at::cat(layer_output, input.dim() - 1);
   }
 
   //TODO unpack output and transpose!
   output = layer_input;
+  if (batch_first && !is_input_packed) {
+    output.transpose_(0, 1);
+  }
 
-
-
-
-
-
-  Tensor reserve;
   return std::make_tuple(output, hy, cy, reserve);
 }
 
