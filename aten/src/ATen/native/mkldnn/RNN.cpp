@@ -155,7 +155,7 @@ namespace {
     int64_t factor = (rnn.mode == MKLDNN_LSTM) ? 4 : 5;
     int64_t num_reserve = rnn.num_layers * rnn.num_directions() * tensors.seq_length * tensors.mini_batch * factor * rnn.hidden_size;
     num_reserve += (rnn.num_layers-1) * tensors.seq_length * tensors.mini_batch * rnn.hidden_size * rnn.num_directions();
-    num_reserve += (rnn.mode == MKLDNN_LSTM) ? rnn.num_layers * rnn.num_directions() * tensors.mini_batch * rnn.hidden_size : 0;
+    num_reserve += rnn.num_layers * rnn.num_directions() * tensors.seq_length * tensors.mini_batch * rnn.hidden_size;
 
     return num_reserve;
   }
@@ -166,11 +166,11 @@ namespace {
 
     auto storage_sz = _storage_size(rnn, tensors);
     auto output_sz = _output_size(rnn, tensors);
+    auto cy_sz = std::vector<int64_t>{rnn.num_layers * rnn.num_directions(), tensors.seq_length, tensors.mini_batch, rnn.hidden_size};
     output_sz.insert(output_sz.begin(), rnn.num_layers-1);
-    auto hidden_sz = _hidden_size(rnn, tensors);
     size_arr.push_back(storage_sz);
     size_arr.push_back(output_sz);
-    size_arr.push_back(rnn.mode == MKLDNN_LSTM ? hidden_sz : std::vector<int64_t>{0});
+    size_arr.push_back((rnn.mode == MKLDNN_LSTM) ? cy_sz : std::vector<int64_t>{0});
 
     int64_t offset = 0;
     for (auto& size: size_arr) {
@@ -363,13 +363,69 @@ namespace {
   }
 
   template <typename DType>
-  void LSTMCell_backward(void)
+  void LSTMCell_backward(Tensor& grad_xw1, const Tensor& cx, const Tensor& cy,
+    const Tensor& grad_y, const Tensor& grad_cy, Tensor& grad_cx, const Tensor& storage)
   {
-    throw std::runtime_error("LSTMCell_backward: Debug break");
+    auto hsz = grad_y.size(1);
+    auto count = grad_cx.numel();
+
+    auto storage_p = storage.data<DType>();
+    auto grad_xw1_p = grad_xw1.data<DType>();
+    auto cx_p = cx.data<DType>();
+    auto cy_p = cy.data<DType>();
+    auto grad_y_p = grad_y.data<DType>();
+    auto grad_cy_p = grad_cy.data<DType>();
+    auto grad_cx_p = grad_cx.data<DType>();
+
+    #pragma omp parallel for
+    for (int64_t index = 0; index < count; index++) {
+      size_t offset = (index/hsz)*4*hsz+index%hsz;
+
+      DType ig = storage_p[offset+0*hsz];
+      DType fg = storage_p[offset+1*hsz];
+      DType cg = storage_p[offset+2*hsz];
+      DType og = storage_p[offset+3*hsz];
+
+      DType *ih = &grad_xw1_p[offset+0*hsz];
+      DType *fh = &grad_xw1_p[offset+1*hsz];
+      DType *ch = &grad_xw1_p[offset+2*hsz];
+      DType *oh = &grad_xw1_p[offset+3*hsz];
+
+      DType cx_ = cx_p[index];
+      DType cy_ = cy_p[index];
+
+      DType *gi = &grad_cx_p[index];
+
+      DType go = grad_y_p[index];
+      DType goc = grad_cy_p[index];
+
+      DType gcx = std::tanh(cy_);
+
+      DType gog = go * gcx;
+      gcx = go * og * (1 - gcx*gcx) + goc;
+
+      DType gig = gcx * cg;
+      DType gfg = gcx * cx_;
+      DType gcg = gcx * ig;
+
+      gcx = gcx * fg;
+
+      gig = gig * (1-ig) * ig;
+      gfg = gfg * (1-fg) * fg;
+      gcg = gcg * (1-cg*cg);
+      gog = gog * (1-og) * og;
+
+      *ih = gig;
+      *fh = gfg;
+      *ch = gcg;
+      *oh = gog;
+
+      *gi = gcx;
+    }
   }
 
   Tensor _rnn_layer_forward(const RNNParams& fn, const Tensor& x, TensorList weights,
-    const Tensor& hx, const Tensor& cx, Tensor& hy, Tensor& cy, Tensor& storage,
+    const Tensor& hx, const Tensor& cx, Tensor& hy, Tensor& cy, Tensor& storage, Tensor& res_cy,
     bool train, bool reverse)
   {
     auto has_bias = (weights.size() == 4);
@@ -402,9 +458,13 @@ namespace {
       auto hy_t = y[ts];
       auto cy_t = cx.defined() ? cx.type().zeros_like(cx) : hx.type().tensor();
       auto storage_t = train ? storage[ts] : hx.type().tensor();
+      auto res_cy_t = (train && cx.defined()) ? res_cy[ts] : hx.type().tensor();
 
       if (mode == MKLDNN_LSTM) {
         LSTMCell_forward<float>(xw1_t, hw2_t, b1, b2, cx_t, hy_t, cy_t, storage_t, train);
+        if (train) {
+          res_cy_t.copy_(cy_t);
+        }
       } else if (mode == MKLDNN_GRU) {
         GRUCell_forward<float>(xw1_t, hw2_t, b1, b2, hx_t, hy_t, storage_t, train);
       } else {
@@ -422,8 +482,8 @@ namespace {
   }
 
   void _rnn_layer_backward(const RNNParams& fn, const Tensor& x, TensorList weights,
-    const Tensor& hx, const Tensor& cx, const Tensor& y,
-    const Tensor& grad_y, const Tensor& grad_hy, const Tensor& grad_cy, const Tensor& storage,
+    const Tensor& hx, const Tensor& cx, const Tensor& y, const Tensor& grad_y,
+    const Tensor& grad_hy, const Tensor& grad_cy, const Tensor& storage, const Tensor& res_cy,
     Tensor& grad_x, Tensor& grad_hx, Tensor& grad_cx, TensorList grad_weights, bool reverse)
   {
     auto has_bias = (weights.size() == 4);
@@ -445,11 +505,12 @@ namespace {
     // NB: can't use grad_hy_t as a signature of grad_hy here,
     // as we mutates data of grad_hy_t
     auto grad_hy_t = grad_hy.clone();
+    auto grad_cy_t = grad_cy;
     for (int64_t t = 0; t < seq_length; t++) {
       int64_t ts = reverse ? t : (seq_length-t-1);
 
       auto x_t = x[ts];
-      auto hx_t = reverse ? ((ts == seq_length-1 ? hx : y[ts+1]))
+      auto hx_t = reverse ? ((ts == seq_length-1) ? hx : y[ts+1])
                           : ((ts == 0) ? hx : y[ts-1]);
       grad_hy_t += grad_y[ts];
       auto storage_t = storage[ts];
@@ -457,10 +518,17 @@ namespace {
       auto grad_x_t = grad_x[ts];
       auto grad_xw1_t = hx.type().tensor({mini_batch, gate_size});
       auto grad_hw2_t = hx.type().tensor({mini_batch, gate_size});
-      auto grad_hx_t = hx.type().tensor({mini_batch, hidden_size});
+      auto grad_hx_t = hx.type().zeros_like(hx);
 
+      Tensor cx_t, cy_t, grad_cx_t;
       if (mode == MKLDNN_LSTM) {
-        LSTMCell_backward<float>();
+        cx_t = reverse ? ((ts == seq_length-1) ? cx : res_cy[ts+1])
+                       : ((ts == 0) ? cx : res_cy[ts-1]);
+        cy_t = res_cy[ts];
+        grad_cx_t = cx.type().tensor({mini_batch, hidden_size});
+        LSTMCell_backward<float>(grad_xw1_t, cx_t, cy_t, grad_hy_t, grad_cy_t, grad_cx_t, storage_t);
+        grad_hw2_t = grad_xw1_t;
+        grad_cy_t = grad_cx_t;
       }
       else if (mode == MKLDNN_GRU) {
         GRUCell_backward<float>(grad_xw1_t, grad_hw2_t, grad_hy_t, grad_hx_t, storage_t);
@@ -482,6 +550,9 @@ namespace {
     }
     // NB: update grad_hx at the final time step
     grad_hx.copy_(grad_hy_t);
+    if (grad_cy.defined()) {
+      grad_cx.copy_(grad_cy_t);
+    }
   }
 } // anonymous namespace
 
@@ -493,6 +564,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     int64_t fn_num_layers, bool batch_first,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes)
 {
+  std::cout << "fn_train: " << fn_train << std::endl;
   auto input = input_r;
 
   RNNParams fn;
@@ -552,13 +624,14 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
       auto layer_weights = weights[index];
       auto layer_hx = hx[index];
       auto layer_hy = hy[index];
-      auto layer_cx = cx.defined() ? cx[index] : hx.type().tensor();
+      auto layer_cx = cx.defined() ? cx[index] : Tensor();
       auto layer_cy = cx.defined() ? cy[index] : hx.type().tensor();
       auto layer_storage = fn_train ? res_storage[index] : hx.type().tensor();
+      auto layer_res_cy = (fn_train && cx.defined()) ? res_cy[index] : hx.type().tensor();
 
       auto reverse = (direction > 0);
       layer_y[direction] = _rnn_layer_forward(fn, layer_x, layer_weights,
-         layer_hx, layer_cx, layer_hy, layer_cy, layer_storage, fn_train, reverse);
+         layer_hx, layer_cx, layer_hy, layer_cy, layer_storage, layer_res_cy, fn_train, reverse);
     }
     layer_x = at::cat(layer_y, input.dim() - 1);
     // NB: save immediate layer outputs for backward
@@ -671,17 +744,18 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
       auto layer_weights = weights[index];
       auto layer_grad_weights = grad_weights[index];
       auto layer_hx = hx[index];
-      auto layer_cx = cx.defined() ? cx[index] : hx.type().tensor();
+      auto layer_cx = cx.defined() ? cx[index] : Tensor();
       auto layer_grad_hy = grad_hy[index];
-      auto layer_grad_cy = grad_cy.defined() ? grad_cy[index] : hx.type().tensor();
+      auto layer_grad_cy = grad_cy.defined() ? grad_cy[index] : Tensor();
       auto layer_grad_hx = grad_hx[index];
       auto layer_grad_cx = cx.defined() ? grad_cx[index] : hx.type().tensor();
       auto layer_y = layer_ys[direction].contiguous();
       auto layer_grad_y = layer_grad_ys[direction].contiguous();
       auto layer_storage = res_storage[index];
+      auto layer_res_cy = (cx.defined()) ? res_cy[index] : hx.type().tensor();
 
       auto reverse = (direction > 0);
-      _rnn_layer_backward(fn, layer_x, layer_weights, layer_hx, layer_cx, layer_y, layer_grad_y, layer_grad_hy, layer_grad_cy, layer_storage,
+      _rnn_layer_backward(fn, layer_x, layer_weights, layer_hx, layer_cx, layer_y, layer_grad_y, layer_grad_hy, layer_grad_cy, layer_storage, layer_res_cy,
         layer_grad_x, layer_grad_hx, layer_grad_cx, layer_grad_weights, reverse);
     }
     // NB: update grad_output for next layer
