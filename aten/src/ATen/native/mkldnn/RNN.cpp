@@ -183,6 +183,40 @@ namespace {
     return tensor_arr;
   }
 
+  Tensor _unpack_sequence(const TensorDescriptorListParams& tensors, const Tensor& packed) {
+    auto batch_sizes = tensors.batch_sizes;
+    auto unpacked_size = std::vector<int64_t>{tensors.seq_length, tensors.mini_batch, packed.size(1)};
+    auto unpacked = packed.type().tensor(unpacked_size).zero_();
+
+    int64_t offset = 0;
+    for (int64_t t = 0; t < batch_sizes.size(); t++) {
+      auto batch_size_step = batch_sizes[t];
+      auto tensor_from = packed.narrow(0, offset, batch_size_step);
+      auto tensor_to = unpacked[t].narrow(0, 0, batch_size_step);
+      tensor_to.copy_(tensor_from.view_as(tensor_to));
+      offset += batch_size_step;
+    }
+
+    return unpacked;
+  }
+
+  Tensor _pack_sequence(const TensorDescriptorListParams& tensors, const Tensor& unpacked) {
+    auto batch_sizes = tensors.batch_sizes;
+    auto packed_size = std::vector<int64_t>{tensors.batch_sizes_sum, unpacked.size(2)};
+    auto packed = unpacked.type().tensor(packed_size).zero_();
+
+    int64_t offset = 0;
+    for (int64_t t = 0; t < batch_sizes.size(); t++) {
+      auto batch_size_step = batch_sizes[t];
+      auto tensor_from = unpacked[t].narrow(0, 0, batch_size_step);
+      auto tensor_to = packed.narrow(0, offset, batch_size_step);
+      tensor_to.copy_(tensor_from.view_as(tensor_to));
+      offset += batch_size_step;
+    }
+
+    return packed;
+  }
+
   template<typename DType>
   inline DType sigm(DType x) { return 1.0f / (1.0f + std::exp(-x)); }
 
@@ -564,7 +598,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     int64_t fn_num_layers, bool batch_first,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes)
 {
-  std::cout << "fn_train: " << fn_train << std::endl;
   auto input = input_r;
 
   RNNParams fn;
@@ -592,8 +625,10 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     throw std::runtime_error("rnn: cx is not contiguous");
   }
 
-  // TODO unpack input
   auto x = input.contiguous();
+  if (is_input_packed) {
+    x = _unpack_sequence(fn.tensors, x);
+  }
   auto output = input.type().tensor(output_size);
   auto y = output;
   auto hy = hx.type().tensor(hidden_size);
@@ -640,8 +675,10 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     }
   }
 
-  //TODO unpack output and transpose!
   y = layer_x;
+  if (is_input_packed) {
+    y = _pack_sequence(fn.tensors, y);
+  }
   if (batch_first && !is_input_packed) {
     y.transpose_(0, 1);
   }
@@ -700,10 +737,14 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
     throw std::runtime_error("backward_input can only be called in training mode");
   }
 
-  // TODO unpack input, output, gradOutput
   auto x = input.contiguous();
   auto y = output;
   auto grad_y = grad_output.contiguous();
+  if (is_input_packed) {
+    x = _unpack_sequence(fn.tensors, x);
+    y = _unpack_sequence(fn.tensors, y);
+    grad_y = _unpack_sequence(fn.tensors, grad_y);
+  }
   grad_hy = grad_hy.contiguous().view(hidden_size);
   grad_cy =  grad_cy.defined() ? grad_cy.contiguous().view(hidden_size) : Tensor();
   auto grad_x = input.type().tensor(input_size);
@@ -726,7 +767,6 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
     grad_weight_arr.emplace_back(w.type().zeros_like(w));
   }
   MatrixRef<Tensor> grad_weights{grad_weight_arr, static_cast<size_t>(weight_stride0)};
-  std::cout << "output_mask: " << output_mask[0] << " " << output_mask[1] << " " << output_mask[2] << " " << output_mask[3] << std::endl; 
 
   auto num_layers = fn.rnn.num_layers;
   auto num_directions = fn.rnn.num_directions();
@@ -761,14 +801,15 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
     // NB: update grad_output for next layer
     layer_grad_output = layer_grad_x;
   }
-  //TODO do unpacking
-  grad_x = layer_grad_output;
 
+  grad_x = layer_grad_output;
+  if (is_input_packed) {
+    grad_x = _pack_sequence(fn.tensors, grad_x);
+  }
   if (batch_first && !is_input_packed) {
     grad_x = grad_x.transpose_(0, 1);
   }
 
-  //throw std::runtime_error("_mkldnn_rnn_backward: ATen not compiled with MKLDNN support");
   return std::make_tuple(grad_x, grad_hx, grad_cx, grad_weight_arr);
 }
 
