@@ -595,7 +595,8 @@ namespace {
   void _rnn_layer_backward(const RNNParams& fn, const Tensor& x, TensorList weights,
     const Tensor& hx, const Tensor& cx, const Tensor& y, const Tensor& grad_y,
     const Tensor& grad_hy, const Tensor& grad_cy, const Tensor& storage, const Tensor& res_cy,
-    Tensor& grad_x, Tensor& grad_hx, Tensor& grad_cx, TensorList grad_weights, bool reverse)
+    Tensor& grad_x, Tensor& grad_hx, Tensor& grad_cx, TensorList grad_weights,
+    bool reverse, std::array<bool, 4> output_mask)
   {
     auto has_bias = (weights.size() == 4);
     auto is_input_packed = fn.tensors.is_input_packed();
@@ -673,13 +674,13 @@ namespace {
       }
       // NB: grad_x from bidirectional direction should be accumulated
       grad_x_t.addmm_(grad_xw1_t, w1);
-      grad_w1.addmm_(grad_xw1_t.t(), x_t);
-
       grad_hx_t.addmm_(grad_hw2_t, w2);
-      grad_w2.addmm_(grad_hw2_t.t(), hx_t);
-
-      grad_b1 += grad_xw1_t.sum(0);
-      grad_b2 += grad_hw2_t.sum(0);
+      if (output_mask[3]) {
+        grad_w1.addmm_(grad_xw1_t.t(), x_t);
+        grad_w2.addmm_(grad_hw2_t.t(), hx_t);
+        grad_b1 += grad_xw1_t.sum(0);
+        grad_b2 += grad_hw2_t.sum(0);
+      }
 
       if (is_input_packed and reverse) {
         _get_packed_states(grad_hx, grad_hx_t, batch_lengths, ts);
@@ -923,7 +924,7 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
 
       auto reverse = (direction > 0);
       _rnn_layer_backward(fn, layer_x, layer_weights, layer_hx, layer_cx, layer_y, layer_grad_y, layer_grad_hy, layer_grad_cy, layer_storage, layer_res_cy,
-        layer_grad_x, layer_grad_hx, layer_grad_cx, layer_grad_weights, reverse);
+        layer_grad_x, layer_grad_hx, layer_grad_cx, layer_grad_weights, reverse, output_mask);
     }
     // NB: update grad_output for next layer
     layer_grad_output = layer_grad_x;
