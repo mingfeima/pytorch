@@ -77,14 +77,10 @@ def get_rnn_mode(mode):
     else:
         raise Exception("Unknown mode: {}".format(mode))
 
-# NB: We don't have dropout support or
-# RNN_RELU or RNN_TANH at the moment
+# NB: We don't have  RNN_RELU or RNN_TANH at the moment
 def is_rnn_acceptable(*args, **kwargs):
     _SUPPORTED_MODE = {'LSTM', 'GRU'}
     mode = args[0]
-    dropout = kwargs['dropout']
     if mode not in _SUPPORTED_MODE:
-        return False
-    if dropout > 0:
         return False
     return True

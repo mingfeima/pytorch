@@ -13,7 +13,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     TensorList weight, int64_t weight_stride0,
     const Tensor& hx, const Tensor& cx,
     int64_t fn_mode, int64_t fn_hidden_size,
-    int64_t fn_num_layers, bool batch_first,
+    int64_t fn_num_layers, bool batch_first, double fn_dropout,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes) {
   throw std::runtime_error("_mkldnn_rnn: ATen not compiled with MKLDNN support");
 }
@@ -25,7 +25,7 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
     const Tensor& output, const Tensor& grad_output_r,
     const Tensor& grad_hy_r, const Tensor& grad_cy_r,
     int64_t fn_mode, int64_t fn_hidden_size,
-    int64_t fn_num_layers, bool batch_first,
+    int64_t fn_num_layers, bool batch_first, double fn_dropout,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes,
     const Tensor& reserve, std::array<bool, 4> output_mask) {
   throw std::runtime_error("_mkldnn_rnn_backward: ATen not compiled with MKLDNN support");
@@ -46,6 +46,17 @@ namespace {
     MKLDNN_LSTM = 2,     // LSTM with no peephole connections
     MKLDNN_GRU = 3       // GRU with cuDNN flavor
   } mkldnnRNNMode_t;
+
+  // DropoutDescriptor
+  struct DropoutDescriptorParams {
+    bool train;
+    double dropout;
+
+    void set(bool train, double dropout) {
+      this->train = train;
+      this->dropout = dropout;
+    }
+  };
 
   // RNNDescriptor
   struct RNNDescriptorParams {
@@ -92,18 +103,31 @@ namespace {
   // TensorDescriotor
   struct TensorDescriptorListParams {
     IntList batch_sizes;
+    std::vector<int64_t> batch_lengths;
     int64_t seq_length;
     int64_t mini_batch;
     int64_t input_size;
-    // Only valid for packed input
     int64_t batch_sizes_sum;
 
     bool is_input_packed() const {
       return batch_sizes.size() != 0;
     }
 
+    void set_batch_lengths(const IntList& batch_sizes_) {
+      if (batch_sizes_.size() == 0) {
+        return;
+      }
+      batch_lengths.resize(batch_sizes_[0]);
+      for (const auto& bs : batch_sizes_) {
+        for (int64_t n = 0; n < bs; n++) {
+          batch_lengths[n]++;
+        }
+      }
+    }
+
     void set(IntList input_sizes, IntList batch_sizes_, bool batch_first) {
       batch_sizes = batch_sizes_;
+      set_batch_lengths(batch_sizes_);
       if (is_input_packed()) {
         seq_length = batch_sizes.size();
         mini_batch = batch_sizes[0];
@@ -124,6 +148,7 @@ namespace {
   };
 
   struct RNNParams {
+    DropoutDescriptorParams dropout;
     RNNDescriptorParams rnn;
     TensorDescriptorListParams tensors;
   };
@@ -149,28 +174,33 @@ namespace {
     return {rnn.num_layers * rnn.num_directions(), tensors.seq_length, tensors.mini_batch, factor * rnn.hidden_size};
   }
 
-  // NB: LSTM needs to reserve storage, immediate layer outputs and cy
-  // GRU needs to reserve storage and immediate layer outputs
-  int64_t get_num_reserve(const RNNDescriptorParams& rnn, const TensorDescriptorListParams& tensors) {
-    int64_t factor = (rnn.mode == MKLDNN_LSTM) ? 4 : 5;
-    int64_t num_reserve = rnn.num_layers * rnn.num_directions() * tensors.seq_length * tensors.mini_batch * factor * rnn.hidden_size;
-    num_reserve += (rnn.num_layers-1) * tensors.seq_length * tensors.mini_batch * rnn.hidden_size * rnn.num_directions();
-    num_reserve += rnn.num_layers * rnn.num_directions() * tensors.seq_length * tensors.mini_batch * rnn.hidden_size;
+  // NB: LSTM needs to reserve storage, immediate layer outputs, cy, dropout state
+  // GRU needs to reserve storage, immediate layer outputs, dropout state
+  int64_t get_num_reserve(const RNNParams& fn) {
+    int64_t factor = (fn.rnn.mode == MKLDNN_LSTM) ? 4 : 5;
+    int64_t num_reserve = fn.rnn.num_layers * fn.rnn.num_directions() * fn.tensors.seq_length * fn.tensors.mini_batch * factor * fn.rnn.hidden_size;
+    num_reserve += (fn.rnn.num_layers-1) * fn.tensors.seq_length * fn.tensors.mini_batch * fn.rnn.hidden_size * fn.rnn.num_directions();
+    num_reserve += fn.rnn.num_layers * fn.rnn.num_directions() * fn.tensors.seq_length * fn.tensors.mini_batch * fn.rnn.hidden_size;
+    if (fn.dropout.dropout > 0) {
+      num_reserve += (fn.rnn.num_layers-1) * fn.tensors.seq_length * fn.tensors.mini_batch * fn.rnn.hidden_size * fn.rnn.num_directions();
+    }
 
     return num_reserve;
   }
 
-  std::vector<Tensor> get_reserve_tensor(const RNNDescriptorParams& rnn, const TensorDescriptorListParams& tensors, const Tensor& reserve) {
+  std::vector<Tensor> get_reserve_tensor(const RNNParams& fn, const Tensor& reserve) {
     std::vector<Tensor> tensor_arr;
     std::vector<std::vector<int64_t>> size_arr;
 
-    auto storage_sz = _storage_size(rnn, tensors);
-    auto output_sz = _output_size(rnn, tensors);
-    auto cy_sz = std::vector<int64_t>{rnn.num_layers * rnn.num_directions(), tensors.seq_length, tensors.mini_batch, rnn.hidden_size};
-    output_sz.insert(output_sz.begin(), rnn.num_layers-1);
+    auto storage_sz = _storage_size(fn.rnn, fn.tensors);
+    auto output_sz = _output_size(fn.rnn, fn.tensors);
+    auto cy_sz = std::vector<int64_t>{fn.rnn.num_layers * fn.rnn.num_directions(), fn.tensors.seq_length, fn.tensors.mini_batch, fn.rnn.hidden_size};
+    output_sz.insert(output_sz.begin(), fn.rnn.num_layers-1);
     size_arr.push_back(storage_sz);
     size_arr.push_back(output_sz);
-    size_arr.push_back((rnn.mode == MKLDNN_LSTM) ? cy_sz : std::vector<int64_t>{0});
+    size_arr.push_back((fn.rnn.mode == MKLDNN_LSTM) ? cy_sz : std::vector<int64_t>{0});
+    // NB: dropout state has same size as immediate layer oupputs
+    size_arr.push_back((fn.dropout.dropout > 0) ? output_sz : std::vector<int64_t>{0});
 
     int64_t offset = 0;
     for (auto& size: size_arr) {
@@ -215,6 +245,28 @@ namespace {
     }
 
     return packed;
+  }
+
+  void _get_packed_states(Tensor& tensor_to, const Tensor& tensor_from, const IntList& batch_lengths, int64_t t) {
+    if (!tensor_from.defined()) {
+      return;
+    }
+    if (!tensor_to.sizes().equals(tensor_from.sizes())) {
+      throw std::runtime_error("_get_packed_states tensor size mismatch");
+    }
+    for (int64_t n = 0; n < tensor_from.size(0); n++) {
+      if (batch_lengths[n] - 1 == t) {
+        tensor_to[n].copy_(tensor_from[n]);
+      }
+    }
+  }
+
+  void _make_noise(Tensor& noise, double p) {
+    if (p == 1) {
+      noise.zero_();
+    } else {
+      noise.bernoulli_(1-p).div_(1-p);
+    }
   }
 
   template<typename DType>
@@ -463,13 +515,15 @@ namespace {
     bool train, bool reverse)
   {
     auto has_bias = (weights.size() == 4);
+    auto is_input_packed = fn.tensors.is_input_packed();
+    auto batch_lengths = fn.tensors.batch_lengths;
+    auto mode = fn.rnn.mode;
 
     auto w1 = weights[0];
     auto w2 = weights[1];
     auto b1 = has_bias ? weights[2] : Tensor();
     auto b2 = has_bias ? weights[3] : Tensor();
 
-    auto mode = fn.rnn.mode;
     auto seq_length = x.size(0);
     auto mini_batch = x.size(1);
     auto input_size = x.size(2);
@@ -485,14 +539,28 @@ namespace {
     auto cx_t = cx;
     for (int64_t t = 0; t < seq_length; t++) {
       int64_t ts = reverse ? (seq_length-t-1) : t;
+      // NB: Suppose time sequences are (0 refers to padding)
+      //   Sequence 1: A B C D
+      //   Sequence 2: E F 0 0
+      //   Sequence 3: G 0 0 0
+      // for packed input
+      //   forward direction of bidirectional RNN, hx/cx is AEG and hy/cy will be DFG
+      //   backward direction of bidirectional RNN, hx/cx is DFG and hy/cy will be AEG
+      // for padded input
+      //   forward direction of bidirectional RNN, hx/cx is AEG and hy/cy will be D00
+      //   backward direction of bidirectional RNN, hx/cx is D00 and hy/cy will be AEG
+      if (is_input_packed and reverse) {
+        _get_packed_states(hx_t, hx, batch_lengths, ts);
+        _get_packed_states(cx_t, cx, batch_lengths, ts);
+      }
       auto xw1_t = xw1[ts];
       auto hw2_t = hx_t.matmul(w2.t());
       AT_ASSERTM(xw1_t.sizes().equals(hw2_t.sizes()),
         "input weight product and hidden weight product mismatch")
       auto hy_t = y[ts];
-      auto cy_t = cx.defined() ? cx.type().zeros_like(cx) : hx.type().tensor();
+      auto cy_t = cx.defined() ? cx.type().zeros_like(cx) : Tensor();
       auto storage_t = train ? storage[ts] : hx.type().tensor();
-      auto res_cy_t = (train && cx.defined()) ? res_cy[ts] : hx.type().tensor();
+      auto res_cy_t = (train && cx.defined()) ? res_cy[ts] : Tensor();
 
       if (mode == MKLDNN_LSTM) {
         LSTMCell_forward<float>(xw1_t, hw2_t, b1, b2, cx_t, hy_t, cy_t, storage_t, train);
@@ -504,13 +572,22 @@ namespace {
       } else {
         throw std::runtime_error("MKLDNN unsupported RNN mode");
       }
+
+      if (is_input_packed and !reverse) {
+        _get_packed_states(hy, hy_t, batch_lengths, ts);
+        _get_packed_states(cy, cy_t, batch_lengths, ts);
+      }
       // NB: update hidden/cell state for next time step
       hx_t = hy_t;
       cx_t = cy_t;
     }
     // NB: update hy/cy at the final time step
-    hy.copy_(hx_t);
-    cy.copy_(cx_t);
+    if (!is_input_packed || (is_input_packed && reverse)) {
+      hy.copy_(hx_t);
+      if (cx.defined()) {
+        cy.copy_(cx_t);
+      }
+    }
 
     return y;
   }
@@ -521,6 +598,10 @@ namespace {
     Tensor& grad_x, Tensor& grad_hx, Tensor& grad_cx, TensorList grad_weights, bool reverse)
   {
     auto has_bias = (weights.size() == 4);
+    auto is_input_packed = fn.tensors.is_input_packed();
+    auto batch_sizes = fn.tensors.batch_sizes;
+    auto batch_lengths = fn.tensors.batch_lengths;
+    auto mode = fn.rnn.mode;
 
     auto w1 = weights[0];
     auto w2 = weights[1];
@@ -529,7 +610,6 @@ namespace {
     auto grad_b1 = has_bias ? grad_weights[2] : hx.type().tensor();
     auto grad_b2 = has_bias ? grad_weights[3] : hx.type().tensor();
 
-    auto mode = fn.rnn.mode;
     auto seq_length = x.size(0);
     auto mini_batch = x.size(1);
     auto input_size = x.size(2);
@@ -543,9 +623,20 @@ namespace {
     for (int64_t t = 0; t < seq_length; t++) {
       int64_t ts = reverse ? t : (seq_length-t-1);
 
+      if (is_input_packed and !reverse) {
+        _get_packed_states(grad_hy_t, grad_hy, batch_lengths, ts);
+        _get_packed_states(grad_cy_t, grad_cy, batch_lengths, ts);
+      }
       auto x_t = x[ts];
       auto hx_t = reverse ? ((ts == seq_length-1) ? hx : y[ts+1])
                           : ((ts == 0) ? hx : y[ts-1]);
+      if (is_input_packed and reverse) {
+        for (int64_t n = 0; n < mini_batch; n++) {
+          if (batch_lengths[n]-1 == ts) {
+            hx_t[n].copy_(hx[n]);
+          }
+        }
+      }
       grad_hy_t += grad_y[ts];
       auto storage_t = storage[ts];
 
@@ -559,10 +650,12 @@ namespace {
         cx_t = reverse ? ((ts == seq_length-1) ? cx : res_cy[ts+1])
                        : ((ts == 0) ? cx : res_cy[ts-1]);
         cy_t = res_cy[ts];
+        if (is_input_packed and reverse) {
+          _get_packed_states(cx_t, cx, batch_lengths, ts);
+        }
         grad_cx_t = cx.type().tensor({mini_batch, hidden_size});
         LSTMCell_backward<float>(grad_xw1_t, cx_t, cy_t, grad_hy_t, grad_cy_t, grad_cx_t, storage_t);
         grad_hw2_t = grad_xw1_t;
-        grad_cy_t = grad_cx_t;
       }
       else if (mode == MKLDNN_GRU) {
         GRUCell_backward<float>(grad_xw1_t, grad_hw2_t, grad_hy_t, grad_hx_t, storage_t);
@@ -570,6 +663,14 @@ namespace {
         throw std::runtime_error("MKLDNN unsupported RNN mode");
       }
 
+      // NB:
+      if (is_input_packed) {
+        auto bs = batch_sizes[ts];
+        if (bs < mini_batch) {
+          grad_xw1_t.narrow(0, bs, mini_batch - bs).zero_();
+          grad_hw2_t.narrow(0, bs, mini_batch - bs).zero_();
+        }
+      }
       // NB: grad_x from bidirectional direction should be accumulated
       grad_x_t.addmm_(grad_xw1_t, w1);
       grad_w1.addmm_(grad_xw1_t.t(), x_t);
@@ -579,13 +680,21 @@ namespace {
 
       grad_b1 += grad_xw1_t.sum(0);
       grad_b2 += grad_hw2_t.sum(0);
-      // NB: update grad_hy for next time step
+
+      if (is_input_packed and reverse) {
+        _get_packed_states(grad_hx, grad_hx_t, batch_lengths, ts);
+        _get_packed_states(grad_cx, grad_cx_t, batch_lengths, ts);
+      }
+      // NB: update grad_hy/grad_cy for next time step
       grad_hy_t = grad_hx_t;
+      grad_cy_t = grad_cx_t;
     }
     // NB: update grad_hx at the final time step
-    grad_hx.copy_(grad_hy_t);
-    if (grad_cy.defined()) {
-      grad_cx.copy_(grad_cy_t);
+    if (!is_input_packed || (is_input_packed && !reverse)) {
+      grad_hx.copy_(grad_hy_t);
+      if (grad_cy.defined()) {
+        grad_cx.copy_(grad_cy_t);
+      }
     }
   }
 } // anonymous namespace
@@ -595,12 +704,13 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
     TensorList weight, int64_t weight_stride0,
     const Tensor& hx, const Tensor& cx,
     int64_t fn_mode, int64_t fn_hidden_size,
-    int64_t fn_num_layers, bool batch_first,
+    int64_t fn_num_layers, bool batch_first, double fn_dropout,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes)
 {
   auto input = input_r;
 
   RNNParams fn;
+  fn.dropout.set(fn_train, fn_dropout);
   fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional);
   fn.tensors.set(input.sizes(), fn_batch_sizes, batch_first);
 
@@ -624,6 +734,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
   if (cx.defined() && !cx.is_contiguous()) {
     throw std::runtime_error("rnn: cx is not contiguous");
   }
+  if (fn_dropout < 0 || fn_dropout > 1) {
+    throw std::runtime_error("rnn: dropout probability has to be between 0 and 1");
+  }
 
   auto x = input.contiguous();
   if (is_input_packed) {
@@ -635,14 +748,15 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
   // NB: Not allowed to return undefined tensors
   auto cy = cx.defined() ? cx.type().tensor(hidden_size) : hx.type().tensor();
 
-  Tensor reserve, res_storage, res_y, res_cy;
+  Tensor reserve, res_storage, res_y, res_cy, res_dropout;
   if (fn_train) {
-    auto num_reserve = get_num_reserve(fn.rnn, fn.tensors);
+    auto num_reserve = get_num_reserve(fn);
     reserve = hx.type().tensor(num_reserve).zero_();
-    auto res_arr = get_reserve_tensor(fn.rnn, fn.tensors, reserve);
+    auto res_arr = get_reserve_tensor(fn, reserve);
     res_storage = res_arr[0];
     res_y = res_arr[1];
     res_cy = res_arr[2];
+    res_dropout = res_arr[3];
   }
 
   MatrixRef<Tensor> weights{weight, static_cast<size_t>(weight_stride0)};
@@ -668,10 +782,15 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> _mkldnn_rnn(
       layer_y[direction] = _rnn_layer_forward(fn, layer_x, layer_weights,
          layer_hx, layer_cx, layer_hy, layer_cy, layer_storage, layer_res_cy, fn_train, reverse);
     }
-    layer_x = at::cat(layer_y, input.dim() - 1);
+    layer_x = at::cat(layer_y, x.dim() - 1);
     // NB: save immediate layer outputs for backward
     if (fn_train && (layer != num_layers - 1)) {
       res_y[layer].copy_(layer_x);
+    }
+    if (fn_train && (layer != num_layers - 1) && (fn_dropout > 0)) {
+      auto noise = res_dropout[layer];
+      _make_noise(noise, fn_dropout);
+      layer_x.mul_(noise);
     }
   }
 
@@ -693,7 +812,7 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
     const Tensor& output_r, const Tensor& grad_output_r,
     const Tensor& grad_hy_r, const Tensor& grad_cy_r,
     int64_t fn_mode, int64_t fn_hidden_size,
-    int64_t fn_num_layers, bool batch_first,
+    int64_t fn_num_layers, bool batch_first, double fn_dropout,
     bool fn_train, bool fn_bidirectional, IntList fn_batch_sizes,
     const Tensor& reserve, std::array<bool, 4> output_mask)
 {
@@ -704,6 +823,7 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
   auto grad_cy = cx.defined() ? (grad_cy_r.defined() ? grad_cy_r : cx.type().zeros_like(cx)) : grad_cy_r;
 
   RNNParams fn;
+  fn.dropout.set(fn_train, fn_dropout);
   fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional);
   fn.tensors.set(input.sizes(), fn_batch_sizes, batch_first);
 
@@ -736,6 +856,9 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
   if (!fn_train) {
     throw std::runtime_error("backward_input can only be called in training mode");
   }
+  if (fn_dropout < 0 || fn_dropout > 1) {
+    throw std::runtime_error("rnn: dropout probability has to be between 0 and 1");
+  }
 
   auto x = input.contiguous();
   auto y = output;
@@ -751,12 +874,13 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
   auto grad_hx = hx.type().tensor(hidden_size);
   auto grad_cx = cx.defined() ? cx.type().tensor(hidden_size) : Tensor();
 
-  Tensor res_storage, res_y, res_cy;
+  Tensor res_storage, res_y, res_cy, res_dropout;
   if (fn_train) {
-    auto res_arr = get_reserve_tensor(fn.rnn, fn.tensors, reserve);
+    auto res_arr = get_reserve_tensor(fn, reserve);
     res_storage = res_arr[0];
     res_y = res_arr[1];
     res_cy = res_arr[2];
+    res_dropout = res_arr[3];
   }
 
   MatrixRef<Tensor> weights{weight, static_cast<size_t>(weight_stride0)};
@@ -773,6 +897,9 @@ std::tuple<Tensor, Tensor, Tensor, std::vector<Tensor>> _mkldnn_rnn_backward(
 
   auto layer_grad_output = grad_y;
   for (int64_t layer = num_layers-1; layer >= 0; layer--) {
+    if ((layer != num_layers-1) && (fn_dropout > 0)) {
+      layer_grad_output.mul_(res_dropout[layer]);
+    }
     auto layer_x = (layer == 0) ? x : res_y[layer-1];
     auto layer_grad_x = layer_x.type().zeros_like(layer_x);
     auto layer_output = (layer == num_layers-1) ? y : res_y[layer];
