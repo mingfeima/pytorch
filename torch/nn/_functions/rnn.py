@@ -314,7 +314,7 @@ def MkldnnRNN(mode, input_size, hidden_size, num_layers=1,
             input, weight_arr, weight_stride0,
             hx, cx,
             mode, hidden_size, num_layers,
-            batch_first, train, bool(bidirectional),
+            batch_first, dropout, train, bool(bidirectional),
             list(batch_sizes.data) if variable_length else ())
 
         if cx is not None:

@@ -1212,8 +1212,8 @@
 - name: mkldnn_convolution(Tensor self, Tensor weight, Tensor bias, IntList padding, IntList stride, IntList dilation)
   self, weight, bias: mkldnn_convolution_backward(self, grad, weight, padding, stride, dilation, grad_input_mask)
 
-- name: _mkldnn_rnn(Tensor input, TensorList weight, int64_t weight_stride0, Tensor hx, Tensor cx, int64_t mode, int64_t hidden_size, int64_t num_layers, bool batch_first, bool train, bool bidirectional, IntList batch_sizes)
-  input, hx, cx, weight: "_mkldnn_rnn_backward(input, weight, weight_stride0, hx, cx, result0, grads[0], grads[1], grads[2], mode, hidden_size, num_layers, batch_first, train, bidirectional, batch_sizes, retain_variables ? result3.clone() : result3, grad_input_mask)"
+- name: _mkldnn_rnn(Tensor input, TensorList weight, int64_t weight_stride0, Tensor hx, Tensor cx, int64_t mode, int64_t hidden_size, int64_t num_layers, bool batch_first, double dropout, bool train, bool bidirectional, IntList batch_sizes)
+  input, hx, cx, weight: "_mkldnn_rnn_backward(input, weight, weight_stride0, hx, cx, result0, grads[0], grads[1], grads[2], mode, hidden_size, num_layers, batch_first, dropout, train, bidirectional, batch_sizes, retain_variables ? result3.clone() : result3, grad_input_mask)"
 
 # fft
 - name: _fft_with_size(Tensor self, int64_t signal_ndim, bool complex_input, bool complex_output, bool inverse, IntList checked_signal_sizes, bool normalized, bool onesided, IntList output_sizes)
