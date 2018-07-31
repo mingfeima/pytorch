@@ -630,7 +630,6 @@ namespace {
         _get_packed_states(grad_hy_t, grad_hy, batch_lengths, ts);
         _get_packed_states(grad_cy_t, grad_cy, batch_lengths, ts);
       }
-      auto x_t = x[ts];
       auto hx_t = reverse ? ((ts == seq_length-1) ? hx : y[ts+1])
                           : ((ts == 0) ? hx : y[ts-1]);
       if (is_input_packed and reverse) {
@@ -671,9 +670,7 @@ namespace {
       // NB: grad_x from bidirectional direction should be accumulated
       grad_hx_t.addmm_(grad_hw2_t, w2);
       if (output_mask[3]) {
-        grad_w1.addmm_(grad_xw1_t.t(), x_t);
         grad_w2.addmm_(grad_hw2_t.t(), hx_t);
-        grad_b1 += grad_xw1_t.sum(0);
         grad_b2 += grad_hw2_t.sum(0);
       }
 
@@ -687,8 +684,14 @@ namespace {
     }
 
     // NB: fuse grad_xw1*w1 from each time step
+    auto x_view = x.view({-1, input_size});
     auto grad_x_view = grad_x.view({-1, input_size});
-    grad_x_view.addmm_(grad_xw1.view({-1, gate_size}), w1);
+    auto grad_xw1_view = grad_xw1.view({-1, gate_size});
+    grad_x_view.addmm_(grad_xw1_view, w1);
+    if (output_mask[3]) {
+      grad_w1.addmm_(grad_xw1_view.t(), x_view);
+      grad_b1 += grad_xw1_view.sum(0);
+    }
 
     // NB: update grad_hx at the final time step
     if (!is_input_packed || (is_input_packed && !reverse)) {
