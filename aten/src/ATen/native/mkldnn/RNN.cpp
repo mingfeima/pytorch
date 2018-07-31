@@ -617,6 +617,8 @@ namespace {
     auto gate_size = w2.size(0);
     auto hidden_size = w2.size(1);
 
+    auto grad_xw1 = x.type().tensor({seq_length, mini_batch, gate_size});
+
     // NB: can't use grad_hy_t as a signature of grad_hy here,
     // as we mutates data of grad_hy_t
     auto grad_hy_t = grad_hy.clone();
@@ -632,17 +634,12 @@ namespace {
       auto hx_t = reverse ? ((ts == seq_length-1) ? hx : y[ts+1])
                           : ((ts == 0) ? hx : y[ts-1]);
       if (is_input_packed and reverse) {
-        for (int64_t n = 0; n < mini_batch; n++) {
-          if (batch_lengths[n]-1 == ts) {
-            hx_t[n].copy_(hx[n]);
-          }
-        }
+        _get_packed_states(hx_t, hx, batch_lengths, ts);
       }
       grad_hy_t += grad_y[ts];
       auto storage_t = storage[ts];
 
-      auto grad_x_t = grad_x[ts];
-      auto grad_xw1_t = hx.type().tensor({mini_batch, gate_size});
+      auto grad_xw1_t = grad_xw1[ts];
       auto grad_hw2_t = hx.type().tensor({mini_batch, gate_size});
       auto grad_hx_t = hx.type().zeros_like(hx);
 
@@ -664,7 +661,6 @@ namespace {
         throw std::runtime_error("MKLDNN unsupported RNN mode");
       }
 
-      // NB:
       if (is_input_packed) {
         auto bs = batch_sizes[ts];
         if (bs < mini_batch) {
@@ -673,7 +669,6 @@ namespace {
         }
       }
       // NB: grad_x from bidirectional direction should be accumulated
-      grad_x_t.addmm_(grad_xw1_t, w1);
       grad_hx_t.addmm_(grad_hw2_t, w2);
       if (output_mask[3]) {
         grad_w1.addmm_(grad_xw1_t.t(), x_t);
@@ -690,6 +685,11 @@ namespace {
       grad_hy_t = grad_hx_t;
       grad_cy_t = grad_cx_t;
     }
+
+    // NB: fuse grad_xw1*w1 from each time step
+    auto grad_x_view = grad_x.view({-1, input_size});
+    grad_x_view.addmm_(grad_xw1.view({-1, gate_size}), w1);
+
     // NB: update grad_hx at the final time step
     if (!is_input_packed || (is_input_packed && !reverse)) {
       grad_hx.copy_(grad_hy_t);
