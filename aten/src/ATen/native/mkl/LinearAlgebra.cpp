@@ -34,22 +34,16 @@ namespace at { namespace native {
 
 static inline void gemm_batched(const CBLAS_TRANSPOSE trans_A, const CBLAS_TRANSPOSE trans_B,
   const int batch_size, const int M, const int N, const int K, const float alpha,
-  const float** A, const float** B, const float beta, float** C) {
-  const int lda = (trans_A == CblasNoTrans) ? K : M;
-  const int ldb = (trans_B == CblasNoTrans) ? N : K;
-  const int ldc = N;
-
+  const float** A, const int lda, const float** B, const int ldb, const float beta,
+  float** C, const int ldc) {
   cblas_sgemm_batch(CblasRowMajor, &trans_A, &trans_B, &M, &N, &K, &alpha,
     A, &lda, B, &ldb, &beta, C, &ldc, 1, &batch_size);
 }
 
 static inline void gemm_batched(const CBLAS_TRANSPOSE trans_A, const CBLAS_TRANSPOSE trans_B,
   const int batch_size, const int M, const int N, const int K, const double alpha,
-  const double** A, const double** B, const double beta, double** C) {
-  const int lda = (trans_A == CblasNoTrans) ? K : M;
-  const int ldb = (trans_B == CblasNoTrans) ? N : K;
-  const int ldc = N;
-
+  const double** A, const int lda, const double** B, const int ldb, const double beta,
+  double** C, const int ldc) {
   cblas_dgemm_batch(CblasRowMajor, &trans_A, &trans_B, &M, &N, &K, &alpha,
     A, &lda, B, &ldb, &beta, C, &ldc, 1, &batch_size);
 }
@@ -57,7 +51,7 @@ static inline void gemm_batched(const CBLAS_TRANSPOSE trans_A, const CBLAS_TRANS
 template <typename scalar_t>
 static inline void _bmm_mkl(Tensor& res, const Tensor& mat1, const Tensor& mat2) {
   auto is_transposed = [&](const Tensor& t) {
-    return t.stride(0) == 1 && t.stride(1) == t.size(0);
+    return t.stride(0) == 1 && t.stride(1) >= t.size(0);
   };
   const CBLAS_TRANSPOSE trans_A = is_transposed(mat1[0]) ? CblasTrans : CblasNoTrans;
   const CBLAS_TRANSPOSE trans_B = is_transposed(mat2[0]) ? CblasTrans : CblasNoTrans;
@@ -66,6 +60,10 @@ static inline void _bmm_mkl(Tensor& res, const Tensor& mat1, const Tensor& mat2)
   const int M = mat1.size(1);
   const int N = mat2.size(2);
   const int K = mat1.size(2);
+  const int lda = (trans_A == CblasNoTrans) ? mat1[0].stride(0) : mat1[0].stride(1);
+  const int ldb = (trans_B == CblasNoTrans) ? mat2[0].stride(0) : mat2[0].stride(1);
+  const int ldc = N;
+
   scalar_t alpha = static_cast<scalar_t>(1.0);
   scalar_t beta = static_cast<scalar_t>(0.0);
 
@@ -78,7 +76,7 @@ static inline void _bmm_mkl(Tensor& res, const Tensor& mat1, const Tensor& mat2)
     C[batch] = res[batch].data<scalar_t>();
   }
 
-  gemm_batched(trans_A, trans_B, batch_size, M, N, K, alpha, A.data(), B.data(), beta, C.data());
+  gemm_batched(trans_A, trans_B, batch_size, M, N, K, alpha, A.data(), lda, B.data(), ldb, beta, C.data(), ldc);
 }
 
 // MKL BMM
