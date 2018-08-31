@@ -56,6 +56,12 @@ static inline void gemm_batched(const CBLAS_TRANSPOSE trans_A, const CBLAS_TRANS
 
 template <typename scalar_t>
 static inline void _bmm_mkl(Tensor& res, const Tensor& mat1, const Tensor& mat2) {
+  auto is_transposed = [&](const Tensor& t) {
+    return t.stride(0) == 1 && t.stride(1) == t.size(0);
+  };
+  const CBLAS_TRANSPOSE trans_A = is_transposed(mat1[0]) ? CblasTrans : CblasNoTrans;
+  const CBLAS_TRANSPOSE trans_B = is_transposed(mat2[0]) ? CblasTrans : CblasNoTrans;
+
   const int batch_size = mat1.size(0);
   const int M = mat1.size(1);
   const int N = mat2.size(2);
@@ -72,27 +78,18 @@ static inline void _bmm_mkl(Tensor& res, const Tensor& mat1, const Tensor& mat2)
     C[batch] = res[batch].data<scalar_t>();
   }
 
-  gemm_batched(CblasNoTrans, CblasNoTrans, batch_size, M, N, K, alpha, A.data(), B.data(), beta, C.data());
+  gemm_batched(trans_A, trans_B, batch_size, M, N, K, alpha, A.data(), B.data(), beta, C.data());
 }
 
 // MKL BMM
 Tensor bmm_mkl(const Tensor& self, const Tensor& tensor) {
-  if (self.dim() != 3 || tensor.dim() != 3) {
-    std::ostringstream ss;
-    ss << "expected 3D tensors, got " << self.dim() << "D and " << tensor.dim() << "D";
-    throw std::runtime_error(ss.str());
-  }
-  if (self.size(0) != tensor.size(0)) {
-    std::ostringstream ss;
-    ss << "equal number of batches expected, got " << self.size(0) << ", " << tensor.size(0);
-    throw std::runtime_error(ss.str());
-  }
-  if (self.size(2) != tensor.size(1)) {
-    std::ostringstream ss;
-    ss << "wrong matrix size, batch1: " << self.size(1) << "x" << self.size(2)
-       << ", batch2 " << tensor.size(1) << "x" << tensor.size(2);
-    throw std::runtime_error(ss.str());
-  }
+  AT_CHECK(self.dim() == 3, "expected 3D tensor, got ", self.dim(), "D");
+  AT_CHECK(tensor.dim() == 3, "expected 3D tensor, got ", tensor.dim(), "D");
+  AT_CHECK(self.size(0) == tensor.size(0),
+          "equal number of batches expected, got ", self.size(0), ", ", tensor.size(0));
+  AT_CHECK(self.size(2) == tensor.size(1),
+          "wrong matrix size, batch1: ", self.size(1), "x", self.size(2),
+          ", batch2 ", tensor.size(1), "x", tensor.size(2));
 
   std::vector<int64_t> output_sz{self.size(0), self.size(1), tensor.size(2)};
   auto result = self.type().tensor(output_sz);
