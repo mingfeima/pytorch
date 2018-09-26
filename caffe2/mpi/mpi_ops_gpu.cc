@@ -13,7 +13,7 @@ namespace caffe2 {
   OMPI_MAJOR_VERSION * 10000 + OMPI_MINOR_VERSION * 100 + OMPI_RELEASE_VERSION
 #if CAFFE2_OMPI_VERSION >= 20000
 // OpenMPI 2.x now supports compile time check whether CUDA is supported.
-#include "mpi-ext.h" /* Needed for CUDA-aware check */
+#include "mpi.h" /* Needed for CUDA-aware check */
 #if MPIX_CUDA_AWARE_SUPPORT
 #define CAFFE2_HAS_CUDA_MPI_BASICS 1
 #define CAFFE2_HAS_CUDA_MPI_ALLREDUCE 1

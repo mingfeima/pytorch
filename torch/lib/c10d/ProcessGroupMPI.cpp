@@ -2,7 +2,7 @@
 
 #include <map>
 
-#include <mpi-ext.h> // Needed for CUDA-aware check
+#include <mpi.h> // Needed for CUDA-aware check
 
 namespace c10d {
 
