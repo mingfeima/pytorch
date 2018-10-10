@@ -162,6 +162,41 @@ struct LSTMCell : Cell<std::tuple<Tensor, Tensor>> {
       return std::make_tuple(std::get<0>(result), std::get<1>(result));
     }
 
+    bool use_mkldnn = true;
+    if (use_mkldnn) {
+      std::vector<Tensor> weight;
+      weight.emplace_back(params.w_ih);
+      weight.emplace_back(params.w_hh);
+      weight.emplace_back(params.b_ih);
+      weight.emplace_back(params.b_hh);
+      auto result = at::mkldnn_rnn_cell(input, weight, hx, cx);
+#if 0
+      // debug
+      auto gates = at::linear(input, params.w_ih, params.b_ih) + at::linear(hx, params.w_hh, params.b_hh);
+      auto chunked_gates = gates.chunk(4, 1);
+
+      auto ingate = chunked_gates[0].sigmoid();
+      auto forgetgate = chunked_gates[1].sigmoid();
+      auto cellgate = chunked_gates[2].tanh();
+      auto outgate = chunked_gates[3].sigmoid();
+
+      auto cy = (forgetgate * cx) + (ingate * cellgate);
+      auto hy = outgate * cy.tanh();
+
+      auto hy_ = std::get<0>(result);
+      auto cy_ = std::get<1>(result);
+
+      //std::cout << "cy sum " << cy.sum() << std::endl;
+      //std::cout << "hy sum " << hy.sum() << std::endl;
+      //std::cout << "cy_ sum " << cy_.sum() << std::endl;
+      //std::cout << "hy_ sum " << hy_.sum() << std::endl;
+
+      std::cout << "cy max diff: " << (cy - cy_).abs().max() << std::endl;
+      std::cout << "hy max diff: " << (hy - hy_).abs().max() << std::endl;
+#endif
+      return std::make_tuple(std::get<0>(result), std::get<1>(result));
+    }
+
     auto gates = at::linear(input, params.w_ih, params.b_ih) + at::linear(hx, params.w_hh, params.b_hh);
     auto chunked_gates = gates.chunk(4, 1);
 

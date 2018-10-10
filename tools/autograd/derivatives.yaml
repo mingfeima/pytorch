@@ -1256,6 +1256,10 @@
 - name: mkldnn_convolution(Tensor self, Tensor weight, Tensor bias, IntList padding, IntList stride, IntList dilation, int64_t groups)
   self, weight, bias: mkldnn_convolution_backward(self, grad, weight, padding, stride, dilation, groups, grad_input_mask)
 
+- name: mkldnn_rnn_cell(Tensor input, TensorList weight, Tensor hx, Tensor cx)
+#  input, hx, cx, weight: "mkldnn_rnn_cell_backward(input, weight, hx, cx, result0, result1, grads[0], grads[1], retain_variables ? result2.clone() : result2, train)"
+  input, hx, cx, weight: mkldnn_rnn_cell_backward(input, weight, hx, cx, result0, result1, grads[0], grads[1], result2)
+
 # fft
 - name: _fft_with_size(Tensor self, int64_t signal_ndim, bool complex_input, bool complex_output, bool inverse, IntList checked_signal_sizes, bool normalized, bool onesided, IntList output_sizes)
   self: fft_backward(self, grad, signal_ndim, complex_input, complex_output, inverse, checked_signal_sizes, normalized, onesided, output_sizes)

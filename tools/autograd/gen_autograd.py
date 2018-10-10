@@ -37,6 +37,11 @@ HARDCODED_DIFFERENTIABLE_OUTPUTS = {
     #   0 => hy
     #   1 => cy
     #   2 => workspace
+    'mkldnn_rnn_cell': (0, 1),
+    # mkldnn_rnn_cell outputs:
+    #   0 => hy
+    #   1 => cy
+    #   2 => workspace
 }
 
 

@@ -1092,6 +1092,14 @@
 
 - func: mkldnn_convolution_backward(Tensor self, Tensor grad_output, Tensor weight, IntList padding, IntList stride, IntList dilation, int64_t groups, std::array<bool,3> output_mask) -> (Tensor, Tensor, Tensor)
 
+#- func: mkldnn_rnn_cell(Tensor input, TensorList weight, Tensor hx, Tensor? cx, bool train=true) -> (Tensor, Tensor, Tensor)
+
+#- func: mkldnn_rnn_cell_backward(Tensor input, TensorList weight, Tensor hx, Tensor? cx, Tensor hy, Tensor? cy, Tensor grad_hy, Tensor? grad_cy, Tensor workspace, bool train=true) -> (Tensor, Tensor, Tensor, TensorList)
+
+- func: mkldnn_rnn_cell(Tensor input, TensorList weight, Tensor hx, Tensor cx) -> (Tensor, Tensor, Tensor)
+
+- func: mkldnn_rnn_cell_backward(Tensor input, TensorList weight, Tensor hx, Tensor cx, Tensor hy, Tensor cy, Tensor grad_hy, Tensor grad_cy, Tensor workspace) -> (Tensor, Tensor, Tensor, TensorList)
+
 - func: miopen_batch_norm(Tensor input, Tensor weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, double exponential_average_factor, double epsilon) -> (Tensor, Tensor, Tensor)
   dispatch:
     CUDA: miopen_batch_norm
