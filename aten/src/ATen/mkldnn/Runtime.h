@@ -6,44 +6,51 @@ using namespace mkldnn;
 
 namespace at { namespace native {
 
-// CpuEngine singleton
-struct CpuEngine {
-  static CpuEngine& Instance() {
-    static CpuEngine myInstance;
+// MKLDNNEngine singleton
+struct MKLDNNEngine {
+  static MKLDNNEngine& Instance() {
+    static MKLDNNEngine myInstance;
     return myInstance;
   }
   engine& get_engine() {
-    return _cpu_engine;
+    return _engine;
   }
-  CpuEngine(CpuEngine const&) = delete;
-  CpuEngine& operator=(CpuEngine const&) = delete;
+  MKLDNNEngine(MKLDNNEngine const&) = delete;
+  MKLDNNEngine& operator=(MKLDNNEngine const&) = delete;
 
 protected:
-  CpuEngine():_cpu_engine(mkldnn::engine::cpu, 0) {}
-  ~CpuEngine() {}
+  MKLDNNEngine():_engine(engine::cpu, 0) {}
+  ~MKLDNNEngine() {}
 
 private:
-  engine _cpu_engine;
+  engine _engine;
 };
 
-// Stream singleton
-struct Stream {
-  static Stream& Instance() {
-    static Stream myInstance;
+// MKLDNNStream singleton
+struct MKLDNNStream {
+  static MKLDNNStream& Instance() {
+    static thread_local MKLDNNStream myInstance;
     return myInstance;
   };
-  stream& get_stream() {
-    return _cpu_stream;
-  }
-  Stream(Stream const&) = delete;
-  Stream& operator=(Stream const&) = delete;
 
-protected:
-  Stream():_cpu_stream(mkldnn::stream::kind::eager) {}
-  ~Stream() {}
+  void commit(const primitive& _primitive) {
+    net.push_back(_primitive);
+  }
+
+  void submit() {
+    if (!net.empty()) {
+      stream(stream::kind::eager).submit(net).wait();
+      net.clear();
+    }
+  }
 
 private:
-  stream _cpu_stream;
+  std::vector<primitive> net;
 };
+
+#define MKLDNN_EXEC(_primitive)                                   \
+  std::vector<mkldnn::primitive> net;                             \
+  net.push_back(_primitive);                                      \
+  mkldnn::stream(mkldnn::stream::kind::eager).submit(net).wait(); \
 
 }}  // namespace at::native
