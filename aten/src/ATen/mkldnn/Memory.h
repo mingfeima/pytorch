@@ -53,4 +53,9 @@ struct MKLDNNMemory {
   }
 };
 
+inline void set_null_memory(std::shared_ptr<memory>& _mem) {
+  auto _engine = MKLDNNEngine::Instance().get_engine();
+  _mem.reset(new memory({zero_md(), _engine}, nullptr));
+}
+
 }}  // namespace at::native

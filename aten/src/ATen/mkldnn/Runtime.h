@@ -53,4 +53,11 @@ private:
   net.push_back(_primitive);                                      \
   mkldnn::stream(mkldnn::stream::kind::eager).submit(net).wait(); \
 
+template<typename prim_t>
+struct MKLDNNPrimitive {
+  std::shared_ptr<prim_t> _prim;
+  MKLDNNPrimitive() : _prim(nullptr) {}
+  const prim_t& get_primitive() const { return *_prim; }
+};
+
 }}  // namespace at::native

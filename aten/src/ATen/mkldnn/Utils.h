@@ -4,11 +4,12 @@
 
 namespace at { namespace native {
 
-template <typename key_t, typename handle_t>
+template <typename key_t, typename prim_t>
 struct PrimitiveCache {
-  std::unordered_map<key_t, handle_t, ParamsHash<key_t>, ParamsEqual<key_t>> map;
+  using prim_handle_t = std::shared_ptr<prim_t>;
+  std::unordered_map<key_t, prim_handle_t, ParamsHash<key_t>, ParamsEqual<key_t>> map;
 
-  bool find(const key_t& params, handle_t& results) {
+  bool find(const key_t& params, prim_handle_t& results) {
     auto it = map.find(params);
     if (it == map.end()) {
       return false;
@@ -17,8 +18,8 @@ struct PrimitiveCache {
     return true;
   }
 
-  void insert(const key_t& params, const handle_t& results) {
-    map.insert(std::pair<key_t, handle_t>(params, results));
+  void insert(const key_t& params, const prim_handle_t& results) {
+    map.insert(std::pair<key_t, prim_handle_t>(params, results));
   }
 };
 

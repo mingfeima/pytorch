@@ -240,6 +240,98 @@ convolution_backward_weights::primitive_desc _conv_bwd_weight_pd(const Convoluti
   return  convolution_backward_weights::primitive_desc(*_desc, _engine, _conv_fwd_pd(args));
 }
 
+struct MKLDNNConvForward : MKLDNNPrimitive<convolution_forward> {
+  std::shared_ptr<memory> _input;
+  std::shared_ptr<memory> _weight;
+  std::shared_ptr<memory> _bias;
+  std::shared_ptr<memory> _output;
+
+  MKLDNNConvForward() : MKLDNNPrimitive<convolution_forward>() {
+    set_null_memory(_input);
+    set_null_memory(_weight);
+    set_null_memory(_bias);
+    set_null_memory(_output);
+  }
+
+  void set(const convolution_forward::primitive_desc pd, const memory& input,
+      const memory& weight, const std::shared_ptr<memory>& bias, const memory& output) {
+    _input->set_data_handle(input.get_data_handle());
+    _weight->set_data_handle(weight.get_data_handle());
+    _output->set_data_handle(output.get_data_handle());
+
+    if (bias != nullptr) {
+      _bias->set_data_handle(bias->get_data_handle());
+      if (_prim == nullptr) {
+        _prim.reset(new convolution_forward(pd, primitive::at(*_input),
+          primitive::at(*_weight), primitive::at(*_bias), *_output));
+      }
+    } else {
+      if (_prim == nullptr) {
+        _prim.reset(new convolution_forward(pd, primitive::at(*_input),
+          primitive::at(*_weight), *_output));
+      }
+    }
+  }
+};
+
+struct MKLDNNConvBackwardData : MKLDNNPrimitive<convolution_backward_data> {
+  std::shared_ptr<memory> _grad_output;
+  std::shared_ptr<memory> _weight;
+  std::shared_ptr<memory> _grad_input;
+
+  MKLDNNConvBackwardData() : MKLDNNPrimitive<convolution_backward_data>() {
+    set_null_memory(_grad_output);
+    set_null_memory(_weight);
+    set_null_memory(_grad_input);
+  }
+
+  void set(const convolution_backward_data::primitive_desc& pd,
+      const memory& grad_output, const memory& weight, const memory& grad_input) {
+    _grad_output->set_data_handle(grad_output.get_data_handle());
+    _weight->set_data_handle(weight.get_data_handle());
+    _grad_input->set_data_handle(grad_input.get_data_handle());
+
+    if (_prim == nullptr) {
+      _prim.reset(new convolution_backward_data(pd, primitive::at(*_grad_output),
+        primitive::at(*_weight), *_grad_input));
+    }
+  }
+};
+
+struct MKLDNNConvBackwardWeight : MKLDNNPrimitive<convolution_backward_weights> {
+  std::shared_ptr<memory> _input;
+  std::shared_ptr<memory> _grad_output;
+  std::shared_ptr<memory> _grad_weight;
+  std::shared_ptr<memory> _grad_bias;
+
+  MKLDNNConvBackwardWeight() : MKLDNNPrimitive<convolution_backward_weights>() {
+    set_null_memory(_input);
+    set_null_memory(_grad_output);
+    set_null_memory(_grad_weight);
+    set_null_memory(_grad_bias);
+  }
+
+  void set(const convolution_backward_weights::primitive_desc& pd, const memory& input,
+      const memory& grad_output, const memory& grad_weight, const std::shared_ptr<memory>& grad_bias) {
+    _input->set_data_handle(input.get_data_handle());
+    _grad_output->set_data_handle(grad_output.get_data_handle());
+    _grad_weight->set_data_handle(grad_weight.get_data_handle());
+
+    if (grad_bias != nullptr) {
+      _grad_bias->set_data_handle(grad_bias->get_data_handle());
+      if (_prim == nullptr) {
+        _prim.reset(new convolution_backward_weights(pd, primitive::at(*_input),
+          primitive::at(*_grad_output), *_grad_weight, *_grad_bias));
+      }
+    } else {
+      if (_prim == nullptr) {
+        _prim.reset(new convolution_backward_weights(pd, primitive::at(*_input),
+          primitive::at(*_grad_output), *_grad_weight));
+      }
+    }
+  }
+};
+
 }  // namespace
 
 Tensor mkldnn_convolution(const Tensor& input, const Tensor& weight, const Tensor& bias,
@@ -258,15 +350,21 @@ Tensor mkldnn_convolution(const Tensor& input, const Tensor& weight, const Tenso
   auto weight_prv = weight_usr.reorder_to(_pd.weights_primitive_desc());
   auto output_prv = output_usr.create(_pd.dst_primitive_desc());
 
-  std::shared_ptr<convolution_forward> conv_fwd;
   std::shared_ptr<memory> bias_prv;
   if (bias.defined()) {
     bias_prv.reset(new memory(args.bias_pd(), bias.data_ptr()));
-    conv_fwd.reset(new convolution_forward(_pd, input_prv, weight_prv, *bias_prv, output_prv));
-  } else {
-    conv_fwd.reset(new convolution_forward(_pd, input_prv, weight_prv, output_prv));
   }
-  MKLDNN_EXEC(*conv_fwd);
+
+  std::shared_ptr<MKLDNNConvForward> conv_fwd;
+  static thread_local PrimitiveCache<ConvolutionParams, MKLDNNConvForward> cache;
+  if (cache.find(args.params, conv_fwd)) {
+    conv_fwd->set(_pd, input_prv, weight_prv, bias_prv, output_prv);
+  } else {
+    conv_fwd.reset(new MKLDNNConvForward());
+    conv_fwd->set(_pd, input_prv, weight_prv, bias_prv, output_prv);
+    cache.insert(args.params, conv_fwd);
+  }
+  MKLDNN_EXEC(conv_fwd->get_primitive());
   output_usr.reorder_from(output_prv);
 
   return output;
@@ -288,7 +386,16 @@ Tensor mkldnn_convolution_backward_input(IntList input_size, const Tensor& grad_
   auto weight_prv = weight_usr.reorder_to(_pd.weights_primitive_desc());
   auto grad_input_prv = grad_input_usr.create(_pd.diff_src_primitive_desc());
 
-  MKLDNN_EXEC(convolution_backward_data(_pd, grad_output_prv, weight_prv, grad_input_prv));
+  std::shared_ptr<MKLDNNConvBackwardData> conv_bwd_data;
+  static thread_local PrimitiveCache<ConvolutionParams, MKLDNNConvBackwardData> cache;
+  if (cache.find(args.params, conv_bwd_data)) {
+    conv_bwd_data->set(_pd, grad_output_prv, weight_prv, grad_input_prv);
+  } else {
+    conv_bwd_data.reset(new MKLDNNConvBackwardData());
+    conv_bwd_data->set(_pd, grad_output_prv, weight_prv, grad_input_prv);
+    cache.insert(args.params, conv_bwd_data);
+  }
+  MKLDNN_EXEC(conv_bwd_data->get_primitive());
   grad_input_usr.reorder_from(grad_input_prv);
 
   return grad_input;
@@ -315,16 +422,20 @@ std::tuple<Tensor, Tensor> mkldnn_convolution_backward_weights(IntList weight_si
   auto grad_weight_prv = grad_weight_usr.create(_pd.diff_weights_primitive_desc());
 
   std::shared_ptr<memory> grad_bias_prv;
-  std::shared_ptr<convolution_backward_weights> conv_bwd_weight;
   if (bias_defined) {
     grad_bias_prv.reset(new memory(args.bias_pd(), grad_bias.data_ptr()));
-    conv_bwd_weight.reset(new convolution_backward_weights(_pd, input_prv,
-      grad_output_prv, grad_weight_prv, *grad_bias_prv));
-  } else {
-    conv_bwd_weight.reset(new convolution_backward_weights(_pd, input_prv,
-      grad_output_prv, grad_weight_prv));
   }
-  MKLDNN_EXEC(*conv_bwd_weight);
+
+  std::shared_ptr<MKLDNNConvBackwardWeight> conv_bwd_weight;
+  static thread_local PrimitiveCache<ConvolutionParams, MKLDNNConvBackwardWeight> cache;
+  if (cache.find(args.params, conv_bwd_weight)) {
+    conv_bwd_weight->set(_pd, input_prv, grad_output_prv, grad_weight_prv, grad_bias_prv);
+  } else {
+    conv_bwd_weight.reset(new MKLDNNConvBackwardWeight());
+    conv_bwd_weight->set(_pd, input_prv, grad_output_prv, grad_weight_prv, grad_bias_prv);
+    cache.insert(args.params, conv_bwd_weight);
+  }
+  MKLDNN_EXEC(conv_bwd_weight->get_primitive());
   grad_weight_usr.reorder_from(grad_weight_prv);
 
   return std::tuple<Tensor, Tensor>{grad_weight, grad_bias};
