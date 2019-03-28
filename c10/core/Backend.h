@@ -20,7 +20,7 @@ namespace c10 {
  * would make sense in your use case.  If it doesn't make sense, maybe
  * you want DeviceType.
  */
-enum class Backend { CPU, CUDA, HIP, SparseCPU, SparseCUDA, SparseHIP, MSNPU, XLA, Undefined, NumOptions };
+enum class Backend { CPU, CUDA, HIP, SparseCPU, SparseCUDA, SparseHIP, MSNPU, XLA, MkldnnCPU, Undefined, NumOptions };
 
 static inline Backend toSparse(Backend b) {
   switch (b) {
@@ -81,6 +81,8 @@ static inline Backend tensorTypeIdToBackend(TensorTypeId t) {
     return Backend::SparseCUDA;
   } else if (t == SparseHIPTensorId()) {
     return Backend::SparseHIP;
+  } else if (t == MkldnnCPUTensorId()) {
+    return Backend::MkldnnCPU;
   } else if (t == UndefinedTensorId()) {
     return Backend::Undefined;
   } else {
@@ -106,6 +108,8 @@ static inline TensorTypeId backendToTensorTypeId(Backend b) {
       return SparseCUDATensorId();
     case Backend::SparseHIP:
       return SparseHIPTensorId();
+    case Backend::MkldnnCPU:
+      return MkldnnCPUTensorId();
     case Backend::Undefined:
       return UndefinedTensorId();
     default:
@@ -154,6 +158,8 @@ static inline Backend backendToCPU(Backend b) {
       return Backend::SparseCPU;
     case Backend::MSNPU:
     case Backend::XLA:
+      return Backend::CPU;
+    case Backend::MkldnnCPU:
       return Backend::CPU;
     case Backend::Undefined:
       return Backend::Undefined;
@@ -224,6 +230,8 @@ static inline const char* toString(Backend b) {
       return "SparseCUDA";
     case Backend::SparseHIP:
       return "SparseHIP";
+    case Backend::MkldnnCPU:
+      return "MkldnnCPU";
     default:
       return "UNKNOWN_BACKEND";
   }

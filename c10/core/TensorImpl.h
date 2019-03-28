@@ -224,6 +224,14 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   TensorImpl(Storage&& storage, TensorTypeId type_id, bool is_variable);
 
+  /**
+   * Construct a tensor with an opaque layout given `opaque_handle` backed by `storage` and
+   * metadata `type_id`, `data_type` and `sizes` for dims.
+   */
+  TensorImpl(Storage&& storage, TensorTypeId type_id, bool is_variable,
+             c10::intrusive_ptr<c10::intrusive_ptr_target> opaque_handle,
+             IntArrayRef sizes = IntArrayRef());
+
  private:
   // This constructor is private, because the data_type is redundant with
   // storage.  Still, we pass it in separately because it's easier to write
@@ -360,6 +368,10 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
     return tid == HIPTensorId() || tid == SparseHIPTensorId();
   }
 
+  bool is_mkldnn() const {
+    return type_id() == MkldnnCPUTensorId();
+  }
+
   int64_t get_device() const {
     // NB: This method is not virtual and tries to avoid dispatches in the common case for perf.
     const auto tid = type_id();
@@ -392,6 +404,8 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
     // NB: This method is not virtual and avoid dispatches for perf.
     if (is_sparse()) {
       return kSparse;
+    } else if (is_mkldnn()) {
+      return kMkldnn;
     } else {
       return kStrided;
     }
@@ -816,7 +830,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * Set whether a tensor allows changes to its metadata (e.g. sizes / strides / storage / storage_offset).
    */
   virtual void set_allow_tensor_metadata_change(bool value) {
-    allow_tensor_metadata_change_ = value;
+    allow_tensor_metadata_change_ = value && !opaque_handle_;
   }
 
   /**
@@ -854,14 +868,25 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
   // `allow_tensor_metadata_change_` to false would prevent those changes from happening and is
   // undesirable.
   virtual c10::intrusive_ptr<TensorImpl> shallow_copy_and_detach() const {
-    auto impl = c10::make_intrusive<TensorImpl>(Storage(storage()), type_id(), is_variable());
-    impl->set_sizes_and_strides(sizes(), strides());
-    impl->storage_offset_ = storage_offset_;
-    impl->is_wrapped_number_ = is_wrapped_number_;
-    impl->reserved_ = reserved_;
-    impl->refresh_numel();
-    impl->refresh_contiguous();
-    return impl;
+    if (!opaque_handle_) {
+      auto impl = c10::make_intrusive<TensorImpl>(Storage(storage()), type_id(), is_variable());
+      impl->set_sizes_and_strides(sizes(), strides());
+      impl->storage_offset_ = storage_offset_;
+      impl->is_wrapped_number_ = is_wrapped_number_;
+      impl->reserved_ = reserved_;
+      impl->refresh_numel();
+      impl->refresh_contiguous();
+      return impl;
+    } else {
+      auto impl = c10::make_intrusive<TensorImpl>(
+        Storage(storage()), type_id(), is_variable(), opaque_handle_, sizes());
+      impl->reserved_ = reserved_;
+      return impl;
+    }
+  }
+
+  c10::intrusive_ptr_target* unsafe_opaque_handle() const {
+    return opaque_handle_.get();
   }
 
   inline void set_pyobj(PyObject* pyobj) noexcept {
@@ -914,6 +939,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * This op is auto-asynchronous if the underlying device (CUDA) supports it.
    */
   void Extend(int64_t num, float growthPct) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support Extend");
     AT_ASSERT(sizes_.size() >= 1u);
     AT_ASSERTM(num >= 0, "`num` must be non-negative for Extend");
     AT_ASSERTM(
@@ -979,6 +1005,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   template <class T>
   void ReserveSpace(const T& outer_dim) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support ReserveSpace");
     AT_ASSERTM(
         is_contiguous_,
         "Right now ReserveSpace is only supported for contiguous Tensor.");
@@ -1024,6 +1051,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   template <typename... Ts>
   void Resize(Ts... dim_source) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support Resize");
     bool size_changed = SetDims(dim_source...);
     if (size_changed) {
       // If needed, we will free the data. the next mutable_data() call
@@ -1053,6 +1081,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * This requires the total size of the tensor to remains constant.
    */
   inline void Reshape(const std::vector<int64_t>& dims) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support Reshape");
     AT_ASSERTM(
         is_contiguous_,
         "Right now Reshape is only supported for contiguous Tensor.");
@@ -1081,6 +1110,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * allocation.
    */
   inline void FreeMemory() {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support FreeMemory");
     // We'll detach from the old Storage and create a new one
     storage_ = Storage::create_legacy(storage_.device(), data_type_);
     storage_offset_ = 0;
@@ -1100,6 +1130,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   // To be deprecated
   void ShareData(const TensorImpl& src) {
+    AT_ASSERT(!opaque_handle_);
     // Right now, we are assuming the device_type are the same, since it is
     // inherently the same in the non-templatized code. We should probably add
     // an assert here which might affect perf a little bit.
@@ -1132,6 +1163,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
       DataPtr&& data_ptr,
       const caffe2::TypeMeta& data_type,
       size_t capacity) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support ShareExternalPointer");
     AT_ASSERTM(
         data_type.id() != caffe2::TypeIdentifier::uninitialized(),
         "To share with a raw external pointer you need to pass in an "
@@ -1170,6 +1202,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * and a new storage will be created.
    */
   inline void* raw_mutable_data(const caffe2::TypeMeta& meta) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support raw_mutable_data");
     // For 0-size tensors it's fine to return any pointer (including nullptr)
     if (data_type_ == meta && storage_initialized()) {
       return static_cast<void*>(static_cast<char*>(storage_.data()) + storage_offset_ * meta.itemsize());
@@ -1231,6 +1264,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   template <typename T>
   inline T* mutable_data() {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support mutable_data");
     if (storage_initialized() && storage_.IsType<T>()) {
       return static_cast<T*>(storage_.data()) + storage_offset_;
     }
@@ -1281,6 +1315,7 @@ private:
       typename T,
       typename = typename std::enable_if<std::is_integral<T>::value>::type>
   bool SetDimsTemplate(ArrayRef<T> src) {
+    AT_ASSERTM(!opaque_handle_, "Opaque tensor does not support SetDims");
     auto old_numel = numel_;
     auto old_dim = sizes_.size();
     sizes_.resize(src.size());
@@ -1383,6 +1418,18 @@ protected:
 
   PyObject* pyobj_ = nullptr; // weak reference
 
+  // An `opaque_handle_` allows customized data layout other than the default strided layout.
+  // Storage is initialized and it is valid to get data pointer and range via `data()` and `numel()`.
+  // Metadata like device, dtype and dims can be queried like a normal tensor with strided layout
+  // but cannot be changed. Therefore `allow_tensor_metadata_change()` always returns
+  // `false` and `set_allow_tensor_metadata_change()` is no-op. The `strides()` is not supported.
+  // Calling any method that changes the metadata and storage would fail. Calling to `is_contiguous()`
+  // always returns false since "contiguous" is not well-defined for a customized layout.
+  //
+  // Following invariant holds when `opaque_handle_` is valid:
+  //     `!is_contiguous() && !allow_tensor_metadata_change()`
+  c10::intrusive_ptr<c10::intrusive_ptr_target> opaque_handle_;
+
   // We could save a word or two by combining the SmallVector structs,
   // since their size is redundant, and if we need to overflow the buffer space
   // we could keep the two pointers together. However, that would require
@@ -1456,6 +1503,9 @@ protected:
 //    strong refcount           TODO: pack these into one word
 //    weak refcount
 //    storage pointer
+//    autograd metadata pointer
+//    PyObject pointer
+//    opaque handler pointer
 //    sizes SmallVector (begin)
 //    sizes SmallVector (end)
 //    sizes SmallVector (capacity)
@@ -1475,12 +1525,10 @@ protected:
 //    storage offset
 //    numel
 //    data type pointer
-//    autograd metadata pointer
-//    PyObject pointer
 //    miscellaneous bitfield
 //
 static_assert(sizeof(void*) != sizeof(int64_t) || // if 64-bit...
-              sizeof(TensorImpl) == sizeof(int64_t) * 26,
+              sizeof(TensorImpl) == sizeof(int64_t) * 27,
               "You changed the size of TensorImpl on 64-bit arch."
               "See Note [TensorImpl size constraints] on how to proceed.");
 
