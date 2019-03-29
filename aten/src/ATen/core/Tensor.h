@@ -566,6 +566,7 @@ class CAFFE2_API Tensor {
   std::vector<Tensor> unbind(int64_t dim=0) const;
   Tensor to_sparse(int64_t sparse_dim) const;
   Tensor to_sparse() const;
+  Tensor to_mkldnn() const;
   Tensor to(const TensorOptions & options, bool non_blocking=false, bool copy=false) const;
   Tensor to(Device device, ScalarType dtype, bool non_blocking=false, bool copy=false) const;
   Tensor to(ScalarType dtype, bool non_blocking=false, bool copy=false) const;

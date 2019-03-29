@@ -769,6 +769,9 @@ inline Tensor Tensor::to_sparse(int64_t sparse_dim) const {
 inline Tensor Tensor::to_sparse() const {
     return type().to_sparse(*this);
 }
+inline Tensor Tensor::to_mkldnn() const {
+    return type().to_mkldnn(*this);
+}
 inline Tensor Tensor::to(const TensorOptions & options, bool non_blocking, bool copy) const {
     return type().to(*this, options, non_blocking, copy);
 }
