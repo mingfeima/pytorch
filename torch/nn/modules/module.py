@@ -270,6 +270,23 @@ class Module(object):
         """
         return self._apply(lambda t: t.cpu())
 
+    def mkldnn(self):
+        r"""Moves all model parameters to Mkldnn layout.
+
+        Returns:
+            Module: self
+        """
+        from torch.backends.mkldnn import mkldnn_supported_op
+        def convert_weight_to_mkldnn(m):
+            if type(m) in mkldnn_supported_op:
+                for param in m._parameters.values():
+                    if param is not None:
+                        param.data = param.data.to_mkldnn()
+                        if param._grad is not None:
+                            param._grad.data = param._grad.data.to_mkldnn()
+
+        return self.apply(convert_weight_to_mkldnn)
+
     def type(self, dst_type):
         r"""Casts all parameters and buffers to :attr:`dst_type`.
 
