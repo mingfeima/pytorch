@@ -135,6 +135,8 @@ static inline DeviceType backendToDeviceType(Backend b) {
       return DeviceType::CUDA;
     case Backend::SparseHIP:
       return DeviceType::HIP;
+    case Backend::MkldnnCPU:
+      return DeviceType::CPU;
     case Backend::Undefined:
       AT_ERROR("Undefined backend is not a valid device type");
     default:
