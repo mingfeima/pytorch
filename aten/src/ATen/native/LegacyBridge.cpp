@@ -8,7 +8,7 @@ namespace at { namespace native {
 
 namespace {
   static bool _type_has_native(const Type& dtype) {
-    return dtype.is_sparse();
+    return dtype.is_sparse() || dtype.is_mkldnn();
   }
 
   static bool _has_native(const Tensor& self) {

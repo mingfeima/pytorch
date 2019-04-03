@@ -7,6 +7,10 @@
 
 namespace at { namespace native {
 
+MKLDNNTensor clone_mkldnn(const MKLDNNTensor& self) {
+  AT_ERROR("clone_mkldnn: ATen not compiled with MKLDNN support");
+}
+
 Tensor mkldnn_to_dense(const MKLDNNTensor& self) {
   AT_ERROR("mkldnn_to_dense: ATen not compiled with MKLDNN support");
 }
@@ -70,6 +74,18 @@ MKLDNNTensor new_with_sizes_mkldnn(IntArrayRef sizes, const TensorOptions& optio
 }
 
 } // anonymous namespace
+
+MKLDNNTensor clone_mkldnn(const MKLDNNTensor& self) {
+  auto stensor = get_mkldnn_itensor(self);
+  auto dims = stensor.get_dims();
+  auto size = std::vector<int64_t>(dims.begin(), dims.end());
+  MKLDNNTensor dst = new_with_sizes_mkldnn(size, self.options());
+  auto dtensor = get_mkldnn_itensor(dst);
+
+  reorder::compute(stensor, dtensor);
+
+  return dst;
+}
 
 Tensor mkldnn_to_dense(const MKLDNNTensor& self) {
   AT_ASSERTM(self.type_id() == MkldnnCPUTensorId(), "mkldnn_to_dense: expects MKLDNN tensor");

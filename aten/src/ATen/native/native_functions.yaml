@@ -2552,6 +2552,7 @@
   dispatch:
     SparseCPU: clone_sparse
     SparseCUDA: clone_sparse
+    MkldnnCPU: clone_mkldnn
 
 - func: clone(Tensor self) -> Tensor
   matches_jit_signature: True
