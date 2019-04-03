@@ -117,6 +117,14 @@ PyObject *Tensor_is_sparse(PyTensorType *self) {
   }
 }
 
+PyObject *Tensor_is_mkldnn(PyTensorType *self) {
+  if (self->layout->layout == at::Layout::Mkldnn) {
+    Py_RETURN_FALSE;
+  } else {
+    Py_RETURN_TRUE;
+  }
+}
+
 static struct PyMethodDef metaclass_methods[] = {
   {"__instancecheck__", (PyCFunction)Tensor_instancecheck, METH_O, nullptr},
   {nullptr}
@@ -129,6 +137,7 @@ static struct PyGetSetDef metaclass_properties[] = {
   {"layout",       (getter)Tensor_layout, nullptr, nullptr, nullptr},
   {"is_cuda",      (getter)Tensor_is_cuda, nullptr, nullptr, nullptr},
   {"is_sparse",    (getter)Tensor_is_sparse, nullptr, nullptr, nullptr},
+  {"is_mkldnn",    (getter)Tensor_is_mkldnn, nullptr, nullptr, nullptr},
   {nullptr}
 };
 
