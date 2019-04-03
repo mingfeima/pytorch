@@ -61,10 +61,8 @@ MKLDNNTensor new_with_itensor_mkldnn(itensor&& it, const TensorOptions& options)
       size);
 }
 
-MKLDNNTensor new_with_sizes_mkldnn(
-    IntArrayRef sizes, const tensor::data_type& dtype,
-    const TensorOptions& options) {
-
+MKLDNNTensor new_with_sizes_mkldnn(IntArrayRef sizes, const TensorOptions& options) {
+  auto dtype = get_mkldnn_dtype(options.dtype());
   tensor::dims dst_dims(sizes.begin(), sizes.end());
   itensor it;
   it.resize<AllocForMKLDNN>(dst_dims, dtype);
@@ -92,7 +90,7 @@ MKLDNNTensor dense_to_mkldnn(const Tensor& self) {
 
   auto input = self.contiguous();
   auto dtype = get_mkldnn_dtype(input);
-  Tensor dst = new_with_sizes_mkldnn(input.sizes(), dtype, input.options());
+  Tensor dst = new_with_sizes_mkldnn(input.sizes(), input.options());
   auto dtensor = get_mkldnn_itensor(dst);
 
   dtensor.reorder_from(dtensor.get_dims(), dtype, input.data_ptr());
