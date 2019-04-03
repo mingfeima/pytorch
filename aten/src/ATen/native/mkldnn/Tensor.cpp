@@ -77,7 +77,7 @@ Tensor mkldnn_to_dense(const MKLDNNTensor& self) {
   auto stensor = get_mkldnn_itensor(self);
   auto dims = stensor.get_dims();
   auto size = std::vector<int64_t>(dims.begin(), dims.end());
-  Tensor dst = at::zeros(size, self.options().layout(kStrided));
+  Tensor dst = at::empty(size, self.options().layout(kStrided));
 
   stensor.reorder_to(dst.data_ptr());
 
