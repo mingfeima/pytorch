@@ -61,7 +61,7 @@ RENAME_ATTRIBUTES = {
 # be called very often.
 DONT_PROFILE = {
     'data_ptr', 'get_device', 'is_contiguous', 'is_cuda', 'is_distributed',
-    'is_same_size', 'is_set_to', 'is_signed', 'is_sparse', 'numel',
+    'is_same_size', 'is_set_to', 'is_signed', 'is_sparse', 'is_mkldnn', 'numel',
     'size', 'storage_offset', 'stride',
 }
 
