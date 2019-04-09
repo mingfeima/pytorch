@@ -431,12 +431,12 @@ at::Tensor _convolution(
           params.padding, params.stride, params.dilation, params.groups, params.benchmark, params.deterministic);
     }
   } else if (params.use_mkldnn(input)) {
-    AT_CHECK(input.type() == weight.type(),
-             "Input type (", input.type().toString(), ") and weight type (", weight.type().toString(),
-             ") should be the same");
-    AT_CHECK(!bias.defined() || (input.type() == bias.type()),
-             "Input type (", input.type().toString(), ") and bias type (", bias.type().toString(),
-             ") should be the same");
+    //AT_CHECK(input.type() == weight.type(),
+    //         "Input type (", input.type().toString(), ") and weight type (", weight.type().toString(),
+    //         ") should be the same");
+    //AT_CHECK(!bias.defined() || (input.type() == bias.type()),
+    //         "Input type (", input.type().toString(), ") and bias type (", bias.type().toString(),
+    //         ") should be the same");
     if (params.transposed) {
       output = at::mkldnn_convolution_transpose(
           input, weight.contiguous(),  bias.defined() ? bias.contiguous() : bias,

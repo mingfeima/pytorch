@@ -8,10 +8,18 @@ namespace at { namespace native {
 // Just for documentary purposes
 using MKLDNNTensor = Tensor;
 
+inline itensor get_cpu_itensor(const Tensor& self, const tensor::dims& dim) {
+  auto dtype = get_mkldnn_dtype(self);
+  return {{dim, dtype}, self.data_ptr()};
+}
+
 inline itensor& get_mkldnn_itensor(const MKLDNNTensor& self) {
   AT_ASSERTM(self.type_id() == MkldnnCPUTensorId(), "get_mkldnn_itensor: expects MKLDNN tensor");
   auto it_handle = (OpaqueHandle<itensor>*)self.unsafeGetTensorImpl()->unsafe_opaque_handle();
   return it_handle->get_handle();
 }
+
+#define GET_MKLDNN_TENSOR(TENSOR, DIM) \
+  TENSOR.is_mkldnn() ? get_mkldnn_itensor(TENSOR) : get_cpu_itensor(TENSOR, DIM)
 
 }} // namespace at::native

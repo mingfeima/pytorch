@@ -67,6 +67,7 @@ std::tuple<Tensor, Tensor, Tensor> mkldnn_convolution_transpose_backward(
 #else // AT_MKLDNN_EBABLED
 
 #include <ATen/mkldnn/Runtime.h>
+#include <ATen/mkldnn/TensorUtils.h>
 
 namespace at { namespace native {
 
@@ -215,10 +216,10 @@ Tensor mkldnn_convolution(
   desc x_desc(args.input_tz, dtype);
   desc weight_desc(args.weight_tz, dtype);
 
-  itensor x_, weight_, bias_, y_, y/*user layout*/;
+  itensor x_, /*weight_,*/ bias_, y_, y/*user layout*/;
 
   x_.init(x_desc, input.data_ptr());
-  weight_.init(weight_desc, weight.data_ptr());
+  auto weight_ = GET_MKLDNN_TENSOR(weight, args.weight_tz);
 
   desc y_desc(args.output_tz, x_.get_data_type());
   y.init(y_desc, output.data_ptr());
