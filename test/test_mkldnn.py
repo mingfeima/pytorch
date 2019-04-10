@@ -17,6 +17,8 @@ class TestMkldnn(TestCase):
             cpu_tensor.requires_grad_()
             mkldnn_tensor = cpu_tensor.to_mkldnn()
             cpu_tensor_1 = mkldnn_tensor.to_dense()
+            self.assertFalse(cpu_tensor.is_mkldnn)
+            self.assertTrue(mkldnn_tensor.is_mkldnn)
             self.assertEqual(cpu_tensor, cpu_tensor_1)
             self.assertEqual(mkldnn_tensor.dtype, torch.float)
             self.assertEqual(mkldnn_tensor.device, torch.device('cpu'))
