@@ -18,8 +18,6 @@ MKLDNNTensor dense_to_mkldnn(const Tensor& self) {
 
 #else // AT_MKLDNN_EBABLED
 
-#include <ATen/OpaqueTensorImpl.h>
-#include <c10/core/Allocator.h>
 #include <ATen/mkldnn/Types.h>
 #include <ATen/mkldnn/TensorUtils.h>
 // needs to be included only once in library.

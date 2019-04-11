@@ -1,6 +1,8 @@
 #pragma once
 
 #include <ATen/ATen.h>
+#include <ATen/OpaqueTensorImpl.h>
+#include <c10/core/Allocator.h>
 #include <ATen/mkldnn/Types.h>
 #include <ideep.hpp>
 

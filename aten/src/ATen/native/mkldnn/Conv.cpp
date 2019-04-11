@@ -66,7 +66,8 @@ std::tuple<Tensor, Tensor, Tensor> mkldnn_convolution_transpose_backward(
 
 #else // AT_MKLDNN_EBABLED
 
-#include <ATen/mkldnn/Runtime.h>
+#include <ATen/mkldnn/Types.h>
+#include <ATen/mkldnn/TensorUtils.h>
 
 namespace at { namespace native {
 
