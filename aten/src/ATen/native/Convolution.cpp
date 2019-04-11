@@ -431,19 +431,19 @@ at::Tensor _convolution(
           params.padding, params.stride, params.dilation, params.groups, params.benchmark, params.deterministic);
     }
   } else if (params.use_mkldnn(input)) {
-    AT_CHECK(input.type() == weight.type(),
-             "Input type (", input.type().toString(), ") and weight type (", weight.type().toString(),
-             ") should be the same");
-    AT_CHECK(!bias.defined() || (input.type() == bias.type()),
-             "Input type (", input.type().toString(), ") and bias type (", bias.type().toString(),
-             ") should be the same");
+    AT_CHECK(input.type_id() == CPUTensorId() || input.type_id() == MkldnnCPUTensorId(),
+            "Input should be CPU or MKLDNN Tensor");
+    AT_CHECK(weight.type_id() == CPUTensorId() || weight.type_id() == MkldnnCPUTensorId(),
+            "weight should be CPU or MKLDNN Tensor");
+    AT_CHECK(bias.type_id() == CPUTensorId() || bias.type_id() == MkldnnCPUTensorId(),
+            "bias should be CPU or MKLDNN Tensor");
+    // TODO: 1. handle non-contiguous cpu weight and bias inside mkldnn_convolution
+    //       2. add test case to cover non-contiguous cpu weight and bias
     if (params.transposed) {
-      output = at::mkldnn_convolution_transpose(
-          input, weight.contiguous(),  bias.defined() ? bias.contiguous() : bias,
+      output = at::mkldnn_convolution_transpose(input, weight,  bias,
           params.padding, params.output_padding, params.stride, params.dilation, params.groups);
     } else {
-      output = at::mkldnn_convolution(
-          input, weight.contiguous(), bias.defined() ? bias.contiguous() : bias,
+      output = at::mkldnn_convolution(input, weight, bias,
           params.padding, params.stride, params.dilation, params.groups);
     }
   } else {

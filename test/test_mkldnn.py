@@ -4,6 +4,7 @@ import unittest
 import torch
 from common_utils import TestCase, run_tests
 from torch.autograd.gradcheck import gradgradcheck, gradcheck
+from copy import deepcopy
 
 
 # Comment the line below to find out the CI machines having MKL-DNN build disabled
@@ -89,6 +90,14 @@ class TestMkldnn(TestCase):
     def test_repr(self):
         self.assertTrue("layout=torch._mkldnn" in str(torch.randn((1, 2, 3, 4),
                         dtype=torch.float, device=torch.device('cpu')).to_mkldnn()))
+
+    def test_conv2d_inference(self):
+        # test conv2d with mkldnn weights
+        x = torch.randn(128, 10, 224, 224, dtype=torch.float32)
+
+        model1 = torch.nn.Conv2d(10, 20, 3).float()
+        model2 = deepcopy(model1).mkldnn()
+        self.assertEqual(model1(x), model2(x))
 
 if __name__ == '__main__':
     run_tests()

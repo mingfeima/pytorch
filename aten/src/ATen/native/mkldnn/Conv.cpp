@@ -213,27 +213,28 @@ Tensor mkldnn_convolution(
       stride, dilation, groups, bias.defined(), false);
 
   auto dtype = get_mkldnn_dtype(input);
-  desc x_desc(args.input_tz, dtype);
-  desc weight_desc(args.weight_tz, dtype);
 
-  itensor x_, weight_, bias_, y_, y/*user layout*/;
+  itensor output_;
+  auto input_ = GET_MKLDNN_TENSOR(input, args.input_tz);
 
-  x_.init(x_desc, input.data_ptr());
-  weight_.init(weight_desc, weight.data_ptr());
-
-  desc y_desc(args.output_tz, x_.get_data_type());
-  y.init(y_desc, output.data_ptr());
+  //TODO: aquire desired memory descriptor using expected_weights_descriptor
+  // do inplace reorder for weight_ to cache mkldnn blocked format
+  auto weight_ = GET_MKLDNN_TENSOR(weight, args.weight_tz);
 
   if (args.params.has_bias) {
-    desc bias_desc(args.bias_tz, dtype);
-    bias_.init(bias_desc, bias.data_ptr());
-    convolution_forward::compute(x_, weight_, bias_, args.output_tz, y_,
+    auto bias_ = GET_MKLDNN_TENSOR(bias, args.bias_tz);
+    convolution_forward::compute(input_, weight_, bias_, args.output_tz, output_,
         args._stride, args._dilation, args._padding, args._padding_r);
   } else {
-    convolution_forward::compute(x_, weight_, args.output_tz, y_,
+    convolution_forward::compute(input_, weight_, args.output_tz, output_,
         args._stride, args._dilation, args._padding, args._padding_r);
   }
-  reorder::compute(y_, y);
+
+  if (input.is_mkldnn()) {
+    output = new_with_itensor_mkldnn(std::move(output_), input.options());
+  } else {
+    output_.reorder_to(output.data_ptr());
+  }
 
   return output;
 }

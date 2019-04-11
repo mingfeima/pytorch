@@ -87,4 +87,13 @@ inline itensor& itensor_from_mkldnn(const MKLDNNTensor& self) {
   return mklimpl->unsafe_opaque_handle()->get_target();
 }
 
+// get ideep::tensor from CPU Tensor
+inline itensor itensor_from_dense(const Tensor& self, const tensor::dims& dim) {
+  auto dtype = get_mkldnn_dtype(self);
+  return {{dim, dtype}, self.data_ptr()};
+}
+
+#define GET_MKLDNN_TENSOR(TENSOR, DIM) \
+  TENSOR.is_mkldnn() ? itensor_from_mkldnn(TENSOR) : itensor_from_dense(TENSOR, DIM)
+
 }} // namespace at::native
