@@ -216,9 +216,6 @@ Tensor mkldnn_convolution(
 
   itensor output_;
   auto input_ = GET_MKLDNN_TENSOR(input, args.input_tz);
-
-  //TODO: aquire desired memory descriptor using expected_weights_descriptor
-  // do inplace reorder for weight_ to cache mkldnn blocked format
   auto weight_ = GET_MKLDNN_TENSOR(weight, args.weight_tz);
 
   if (args.params.has_bias) {
