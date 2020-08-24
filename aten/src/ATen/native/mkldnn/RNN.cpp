@@ -131,9 +131,13 @@ std::vector<int64_t> _output_size(const RNNParams& rnn) {
   return {rnn.seq_length, rnn.mini_batch, output_channels};
 }
 
-// MKLDNN GRU bias has 4 gates instead of 3
+// MKLDNN GRU gate order is different from PyTorch's which requires gates shuffle
 // (let rt,zt,nt be reset, update, new gates respectively)
 //
+//   MKLDNN GRU weight_ih/weight_hh gates order: (zt, rt, nt)
+//   PyTorch GRU weight_ih/weight_hh gates order: (rt, zt, nt)
+//
+// MKLDNN GRU bias has 4 gates instead of 3
 //  (PyTorch GRU bias)     (MKLDNN GRU bias)
 //
 //  bias_ih    bias_hh          bias
@@ -147,6 +151,15 @@ std::vector<int64_t> _output_size(const RNNParams& rnn) {
 //                           |   nt2   |
 //                           +---------+
 //
+Tensor _shuffle_weight(const Tensor& weight, int64_t fn_mode) {
+  auto weight_t = weight.contiguous();
+  if (static_cast<mkldnnRNNMode_t>(fn_mode) == MKLDNN_GRU) {
+    std::vector<Tensor> gates = weight_t.chunk(3, /*gates*/0);
+    return at::cat({gates[1], gates[0], gates[2]}, /*gates*/0);
+  }
+  return weight_t;
+};
+
 Tensor _shuffle_bias(const Tensor& bias_ih, const Tensor& bias_hh, int64_t fn_mode) {
   if (static_cast<mkldnnRNNMode_t>(fn_mode) == MKLDNN_GRU) {
     std::vector<Tensor> b1 = bias_ih.chunk(3, /*output_channels*/0);
@@ -172,17 +185,18 @@ Tensor mkldnn_rnn_layer(Tensor& hy_, Tensor& cy_,
   auto output = at::empty(output_size, input.options());
 
   bool has_bias = weights.size() == 4;
-  auto any_weight = weights[0];
+  auto weight_ih = _shuffle_weight(weights[0], rnn.mode);
+  auto weight_hh = _shuffle_weight(weights[1], rnn.mode);
   auto bias = has_bias ? _shuffle_bias(weights[2], weights[3], rnn.mode)
-                       : at::zeros({rnn.num_bias_gates * rnn.hidden_size}, any_weight.options());
+                       : at::zeros({rnn.num_bias_gates * rnn.hidden_size}, weight_ih.options());
 
   // per layer input size
   int64_t input_size = input.size(2);
   auto x = get_mkldnn_tensor(input, rnn.src_layer_desc(input_size));
   auto hx = get_mkldnn_tensor(hx_, rnn.src_iter_desc());
   auto cx = get_mkldnn_tensor(cx_, rnn.src_iter_desc());
-  auto w1 = get_mkldnn_tensor(weights[0], rnn.weights_layer_desc(input_size));
-  auto w2 = get_mkldnn_tensor(weights[1], rnn.weights_iter_desc());
+  auto w1 = get_mkldnn_tensor(weight_ih, rnn.weights_layer_desc(input_size));
+  auto w2 = get_mkldnn_tensor(weight_hh, rnn.weights_iter_desc());
   auto b = get_mkldnn_tensor(bias, rnn.bias_desc());
   auto y = get_mkldnn_tensor(output, rnn.dst_layer_desc());
   auto hy = get_mkldnn_tensor(hy_, rnn.dst_iter_desc());
@@ -193,6 +207,21 @@ Tensor mkldnn_rnn_layer(Tensor& hy_, Tensor& cy_,
   return output;
 }
 
+// MKLDNN RNN integration notes:
+// I. Memory Formats
+//   a. mkldnn will use plain formats for input, hx/cx, output, hy/cy
+//      and possibly use blocked formats for weights depending shape info.
+//   b. All mkldnn memorys are created (in plain format) as views on ATen tensor,
+//      the weight reorder(if any) is handed automatically inside ideep (mkldnn bridge)
+//
+// II. MKLDNN Primitive Mapping
+//   a. mkldnn rnn primitive doesn't support training with dropout or padded input sequence.
+//   b. here break a single RNN module into { num_layers * num_directions } mkldnn rnn primitives
+//      for future need to cover these feature gaps.
+//
+//TODO: a. training with dropout
+//   b. padded sequence input support
+//
 std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
     const Tensor& input_, TensorList weight, int64_t weight_stride0,
     const Tensor& hx_, const Tensor& cx_,
@@ -248,8 +277,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
 
   return std::make_tuple(output, hy, cy, Tensor());
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 //// MKLDNN dispatch for the generic RNN ops (at::lstm, at::gru, ...)
