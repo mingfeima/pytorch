@@ -36,15 +36,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
 
 namespace at { namespace native {
 
-typedef enum {
-  MKLDNN_RNN_RELU = 0,
-  MKLDNN_RNN_TANH = 1,
-  MKLDNN_LSTM = 2,
-  MKLDNN_GRU = 3
-} mkldnnRNNMode_t;
-
 struct RNNParams {
-  mkldnnRNNMode_t mode;
+  ideep::rnn_kind mode;
   int64_t seq_length;
   int64_t mini_batch;
   int64_t input_size;
@@ -60,7 +53,7 @@ struct RNNParams {
   RNNParams(const Tensor& input, IntArrayRef batch_sizes_,
       int64_t mode_, int64_t hidden_size_, int64_t num_layers_,
       bool bidirectional, bool batch_first_, bool train_) {
-    mode = static_cast<mkldnnRNNMode_t>(mode_);
+    mode = static_cast<ideep::rnn_kind>(mode_);
     batch_first = batch_first_;
     if (batch_first) {
       seq_length = input.size(1);
@@ -75,14 +68,14 @@ struct RNNParams {
     num_layers = num_layers_;
     train = train_;
     batch_sizes = batch_sizes_;
-    if (mode == MKLDNN_LSTM) {
+    if (mode == ideep::rnn_kind::LSTM) {
       num_gates = 4;
       num_bias_gates = 4;
-    } else if (mode == MKLDNN_GRU) {
+    } else if (mode == ideep::rnn_kind::GRU) {
       num_gates = 3;
       num_bias_gates = 4;
     } else {
-      // MKLDNN_RNN_RELU; MKLDNN_RNN_TANH
+      // RNN_RELU; RNN_TANH
       num_gates = 1;
       num_bias_gates = 1;
     }
@@ -153,7 +146,7 @@ std::vector<int64_t> _output_size(const RNNParams& rnn) {
 //
 Tensor _shuffle_weight(const Tensor& weight, int64_t fn_mode) {
   auto weight_t = weight.contiguous();
-  if (static_cast<mkldnnRNNMode_t>(fn_mode) == MKLDNN_GRU) {
+  if (static_cast<ideep::rnn_kind>(fn_mode) == ideep::rnn_kind::GRU) {
     std::vector<Tensor> gates = weight_t.chunk(3, /*gates*/0);
     return at::cat({gates[1], gates[0], gates[2]}, /*gates*/0);
   }
@@ -161,7 +154,7 @@ Tensor _shuffle_weight(const Tensor& weight, int64_t fn_mode) {
 };
 
 Tensor _shuffle_bias(const Tensor& bias_ih, const Tensor& bias_hh, int64_t fn_mode) {
-  if (static_cast<mkldnnRNNMode_t>(fn_mode) == MKLDNN_GRU) {
+  if (static_cast<ideep::rnn_kind>(fn_mode) == ideep::rnn_kind::GRU) {
     std::vector<Tensor> b1 = bias_ih.chunk(3, /*output_channels*/0);
     std::vector<Tensor> b2 = bias_hh.chunk(3, /*output_channels*/0);
     return at::cat({b1[1] + b2[1], b1[0] + b2[0], b1[2], b2[2]}, /*output_channels*/0);
@@ -230,7 +223,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
     bool train, bool bidirectional, IntArrayRef batch_sizes) {
   TORCH_CHECK(!train || dropout_p == 0.0, "mkldnn_rnn doesn't support dropout");
   TORCH_CHECK(batch_sizes.size() == 0, "mkldnn_rnn doesn't support packed input");
-  if (mode != MKLDNN_LSTM) {
+  if (static_cast<ideep::rnn_kind>(mode) != ideep::rnn_kind::LSTM) {
     TORCH_CHECK(!cx_.defined(), "mkldnn_rnn: illegal defined cx for non-LSTM RNN");
   }
 
@@ -313,7 +306,7 @@ std::tuple<Tensor, Tensor> pack_hidden<std::tuple<Tensor, Tensor>>(const Tensor&
 template<typename hidden_type>
 std::pair<Tensor, hidden_type> mkldnn_impl(
     const Tensor& input, const hidden_type& hidden,
-    TensorList params, bool has_biases, mkldnnRNNMode_t mode,
+    TensorList params, bool has_biases, ideep::rnn_kind mode,
     int64_t num_layers, double dropout_p, bool train, bool bidirectional, bool batch_first) {
 
   Tensor hx, cx;
@@ -337,7 +330,7 @@ std::tuple<Tensor, Tensor, Tensor> lstm_mkldnn_stub(
     int64_t num_layers, double dropout_p, bool train, bool bidirectional, bool batch_first) {
 
   auto result = mkldnn_impl(input, std::make_tuple(hx[0], hx[1]), params, has_biases,
-      MKLDNN_LSTM, num_layers, dropout_p, train, bidirectional, batch_first);
+      ideep::rnn_kind::LSTM, num_layers, dropout_p, train, bidirectional, batch_first);
   auto output = result.first;
   auto hy = std::get<0>(result.second);
   auto cy = std::get<1>(result.second);
