@@ -91,6 +91,33 @@ struct RNNParams {
   bool is_input_packed() const {
     return batch_sizes.size() != 0;
   }
+
+  // mkldnn memory descriptors
+  using format = ideep::format_tag;
+  using desc = ideep::tensor::desc;
+  using dtype = ideep::tensor::data_type;
+  desc src_layer_desc(int64_t _input_size) const {
+    return {{seq_length, mini_batch, _input_size}, dtype::f32, format::tnc};
+  }
+  desc src_iter_desc() const {
+    return {{1, 1, mini_batch, hidden_size}, dtype::f32, format::ldnc};
+  }
+  // logical size described as ldigo
+  desc weights_layer_desc(int64_t _input_size) const {
+    return {{1, 1, _input_size, num_gates, hidden_size}, dtype::f32, format::ldgoi};
+  }
+  desc weights_iter_desc() const {
+    return {{1, 1, hidden_size, num_gates, hidden_size}, dtype::f32, format::ldgoi};
+  }
+  desc bias_desc() const {
+    return {{1, 1, num_bias_gates, hidden_size}, dtype::f32, format::ldgo};
+  }
+  desc dst_layer_desc() const {
+    return {{seq_length, mini_batch, hidden_size}, dtype::f32, format::tnc};
+  }
+  desc dst_iter_desc() const {
+    return {{1, 1, mini_batch, hidden_size}, dtype::f32, format::ldnc};
+  }
 };
 
 std::vector<int64_t> _hidden_size(const RNNParams& rnn) {
@@ -99,12 +126,9 @@ std::vector<int64_t> _hidden_size(const RNNParams& rnn) {
 
 template<bool is_single_direction>
 std::vector<int64_t> _output_size(const RNNParams& rnn) {
-  auto num_directions = is_single_direction ? 1 : rnn.num_directions;
-  if (rnn.batch_first) {
-    return {rnn.mini_batch, rnn.seq_length, rnn.hidden_size * rnn.num_directions};
-  } else {
-    return {rnn.seq_length, rnn.mini_batch, rnn.hidden_size * rnn.num_directions};
-  }
+  auto output_channels = is_single_direction ? rnn.hidden_size
+                                             : rnn.hidden_size * rnn.num_directions;
+  return {rnn.seq_length, rnn.mini_batch, output_channels};
 }
 
 // MKLDNN GRU bias has 4 gates instead of 3
@@ -132,17 +156,19 @@ Tensor _shuffle_bias(const Tensor& bias_ih, const Tensor& bias_hh, int64_t fn_mo
   return bias_ih + bias_hh;
 };
 
-Tensor mkldnn_rnn_layer(Tensor& hy, Tensor& cy,
-    const Tensor& input, TensorList weights,
-    const Tensor& hx, const Tensor& cx,
-    bool reverse, const RNNParams& rnn) {
-  using format = ideep::format_tag;
-  using itensor = ideep::tensor;
-  auto dtype = ideep::tensor::data_type::f32;
+// Create mkldnn memory view from ATen tensor
+static inline ideep::tensor get_mkldnn_tensor(
+    const Tensor& tensor, const ideep::tensor::desc& desc) {
+  return {desc, tensor.data_ptr<float>()};
+}
 
+Tensor mkldnn_rnn_layer(Tensor& hy_, Tensor& cy_,
+    const Tensor& input, TensorList weights,
+    const Tensor& hx_, const Tensor& cx_,
+    bool reverse, const RNNParams& rnn) {
   TORCH_CHECK(weights.size() == 2 || weights.size() == 4);
 
-  auto output_size = _output_size</*is_single_direction*/false>(rnn);
+  auto output_size = _output_size</*is_single_direction*/true>(rnn);
   auto output = at::empty(output_size, input.options());
 
   bool has_bias = weights.size() == 4;
@@ -150,20 +176,19 @@ Tensor mkldnn_rnn_layer(Tensor& hy, Tensor& cy,
   auto bias = has_bias ? _shuffle_bias(weights[2], weights[3], rnn.mode)
                        : at::zeros({rnn.num_bias_gates * rnn.hidden_size}, any_weight.options());
 
-  auto src_format_tag = rnn.batch_first ? format::ntc : format::tnc;
-  auto src_layer = itensor({{rnn.seq_length, rnn.mini_batch, rnn.input_size}, dtype, src_format_tag}, input.data_ptr<float>());
-  auto src_iter = itensor({{1, 1, rnn.mini_batch, rnn.hidden_size}, dtype, format::ldnc}, hx.data_ptr<float>());
-  auto src_iter_c = itensor({{1, 1, rnn.mini_batch, rnn.hidden_size}, dtype, format::ldnc}, cx.data_ptr<float>());
-  // logical size: ldigo
-  auto weights_layer = itensor({{1, 1, rnn.input_size, rnn.num_gates, rnn.hidden_size}, dtype, format::ldgoi}, weights[0].data_ptr<float>());
-  auto weights_iter = itensor({{1, 1, rnn.hidden_size, rnn.num_gates, rnn.hidden_size}, dtype, format::ldgoi}, weights[1].data_ptr<float>());
-  auto ibias = itensor({{1, 1, rnn.num_bias_gates, rnn.hidden_size}, dtype, format::ldgo}, bias.data_ptr<float>());
-  // logical size: tnc
-  auto dst_layer = itensor({{rnn.seq_length, rnn.mini_batch, rnn.hidden_size}, dtype, src_format_tag}, output.data_ptr<float>());
-  auto dst_iter = itensor({{1, 1, rnn.mini_batch, rnn.hidden_size}, dtype, format::ldnc}, hy.data_ptr<float>());
-  auto dst_iter_c = itensor({{1, 1, rnn.mini_batch, rnn.hidden_size}, dtype, format::ldnc}, cy.data_ptr<float>());
+  // per layer input size
+  int64_t input_size = input.size(2);
+  auto x = get_mkldnn_tensor(input, rnn.src_layer_desc(input_size));
+  auto hx = get_mkldnn_tensor(hx_, rnn.src_iter_desc());
+  auto cx = get_mkldnn_tensor(cx_, rnn.src_iter_desc());
+  auto w1 = get_mkldnn_tensor(weights[0], rnn.weights_layer_desc(input_size));
+  auto w2 = get_mkldnn_tensor(weights[1], rnn.weights_iter_desc());
+  auto b = get_mkldnn_tensor(bias, rnn.bias_desc());
+  auto y = get_mkldnn_tensor(output, rnn.dst_layer_desc());
+  auto hy = get_mkldnn_tensor(hy_, rnn.dst_iter_desc());
+  auto cy = get_mkldnn_tensor(cy_, rnn.dst_iter_desc());
 
-  ideep::lstm_forward_inference::compute(src_layer, src_iter, src_iter_c, weights_layer, weights_iter, ibias, dst_layer, dst_iter, dst_iter_c);
+  ideep::lstm_forward_inference::compute(x, hx, cx, w1, w2, b, y, hy, cy, reverse);
 
   return output;
 }
@@ -182,13 +207,18 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
 
   RNNParams fn(input_, batch_sizes, mode, hidden_size, num_layers, bidirectional, batch_first, train);
 
-  auto input = input_.contiguous();
+  auto input = input_;
+  if (batch_first && !fn.is_input_packed()) {
+    input = input.transpose(0, 1);
+  }
+  input = input.contiguous();
+
   auto hx = hx_.contiguous();
   auto cx = cx_.defined() ? cx_.contiguous() : Tensor();
 
   auto hy = at::empty(_hidden_size(fn), hx.options());
   // NB: Not allowed to return undefined tensors
-  auto cy = cx.defined() ? at::empty(hidden_size, cx.options())
+  auto cy = cx.defined() ? at::empty(_hidden_size(fn), cx.options())
                          : at::empty({0}, hx.options());
 
   MatrixRef<Tensor> weights{weight, static_cast<size_t>(weight_stride0)};
@@ -211,6 +241,10 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mkldnn_rnn(
                                       : at::cat(layer_output, /*output_channels*/-1);
   }
   auto output = layer_input;
+
+  if (batch_first && !fn.is_input_packed()) {
+    output.transpose_(0, 1);
+  }
 
   return std::make_tuple(output, hy, cy, Tensor());
 }
