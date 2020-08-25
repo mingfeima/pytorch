@@ -2037,6 +2037,15 @@
 - func: mkldnn_convolution_backward(Tensor self, Tensor grad_output, Tensor weight, int[] padding, int[] stride, int[] dilation, int groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
   use_c10_dispatcher: full
 
+- func: rnn_tanh_mkldnn_stub(Tensor self, Tensor hx, Tensor[] params, bool has_biases, int num_layers, float dropout, bool train, bool bidirectional, bool batch_first) -> (Tensor, Tensor)
+  use_c10_dispatcher: full
+
+- func: rnn_relu_mkldnn_stub(Tensor self, Tensor hx, Tensor[] params, bool has_biases, int num_layers, float dropout, bool train, bool bidirectional, bool batch_first) -> (Tensor, Tensor)
+  use_c10_dispatcher: full
+
+- func: gru_mkldnn_stub(Tensor self, Tensor hx, Tensor[] params, bool has_biases, int num_layers, float dropout, bool train, bool bidirectional, bool batch_first) -> (Tensor, Tensor)
+  use_c10_dispatcher: full
+
 - func: lstm_mkldnn_stub(Tensor self, Tensor[] hx, Tensor[] params, bool has_biases, int num_layers, float dropout, bool train, bool bidirectional, bool batch_first) -> (Tensor, Tensor, Tensor)
   use_c10_dispatcher: full
 

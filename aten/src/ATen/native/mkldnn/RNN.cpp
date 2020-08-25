@@ -11,6 +11,17 @@
 
 namespace at { namespace native {
 
+#define ONE_HIDDEN_RNN(NAME)                                                   \
+std::tuple<Tensor, Tensor> NAME##_mkldnn_stub(                                 \
+    const Tensor& input, const Tensor& hx, TensorList params, bool has_biases, \
+    int64_t num_layers, double dropout_p, bool train, bool bidirectional, bool batch_first) { \
+  AT_ERROR("NAME##_mkldnn_stub: ATen not compiled with MKLDNN support");       \
+}
+
+ONE_HIDDEN_RNN(gru)
+ONE_HIDDEN_RNN(rnn_tanh)
+ONE_HIDDEN_RNN(rnn_relu)
+
 std::tuple<Tensor, Tensor, Tensor> lstm_mkldnn_stub(
     const Tensor& input, TensorList hx, TensorList params, bool has_biases,
     int64_t num_layers, double dropout_p, bool train, bool bidirectional, bool batch_first) {
@@ -187,15 +198,24 @@ Tensor mkldnn_rnn_layer(Tensor& hy_, Tensor& cy_,
   int64_t input_size = input.size(2);
   auto x = get_mkldnn_tensor(input, rnn.src_layer_desc(input_size));
   auto hx = get_mkldnn_tensor(hx_, rnn.src_iter_desc());
-  auto cx = get_mkldnn_tensor(cx_, rnn.src_iter_desc());
   auto w1 = get_mkldnn_tensor(weight_ih, rnn.weights_layer_desc(input_size));
   auto w2 = get_mkldnn_tensor(weight_hh, rnn.weights_iter_desc());
   auto b = get_mkldnn_tensor(bias, rnn.bias_desc());
   auto y = get_mkldnn_tensor(output, rnn.dst_layer_desc());
   auto hy = get_mkldnn_tensor(hy_, rnn.dst_iter_desc());
-  auto cy = get_mkldnn_tensor(cy_, rnn.dst_iter_desc());
 
-  ideep::lstm_forward_inference::compute(x, hx, cx, w1, w2, b, y, hy, cy, reverse);
+  auto _rnn_kind = static_cast<ideep::rnn_kind>(rnn.mode);
+  if (_rnn_kind == ideep::rnn_kind::LSTM) {
+    auto cx = get_mkldnn_tensor(cx_, rnn.src_iter_desc());
+    auto cy = get_mkldnn_tensor(cy_, rnn.dst_iter_desc());
+    ideep::lstm_forward_inference::compute(x, hx, cx, w1, w2, b, y, hy, cy, reverse);
+  } else if (_rnn_kind == ideep::rnn_kind::GRU) {
+    ideep::gru_forward_inference::compute(x, hx, w1, w2, b, y, hy, reverse);
+  } else {
+    TORCH_CHECK(_rnn_kind == ideep::rnn_kind::RNN_RELU || _rnn_kind == ideep::rnn_kind::RNN_TANH,
+                "mkldnn_rnn: unsuppored rnn mode: ", rnn.mode);
+    ideep::rnn_forward_inference::compute(x, hx, w1, w2, b, y, hy, rnn.mode, reverse);
+  }
 
   return output;
 }
@@ -324,6 +344,23 @@ std::pair<Tensor, hidden_type> mkldnn_impl(
 }
 
 } // anonymous namespace
+
+#define ONE_HIDDEN_RNN(NAME, MODE)                                             \
+std::tuple<Tensor, Tensor> NAME##_mkldnn_stub(                                 \
+    const Tensor& input, const Tensor& hx, TensorList params, bool has_biases, \
+    int64_t num_layers, double dropout_p, bool train, bool bidirectional, bool batch_first) { \
+                                                                               \
+  auto result = mkldnn_impl(input, hx, params, has_biases,                     \
+      MODE, num_layers, dropout_p, train, bidirectional, batch_first);         \
+  auto output = result.first;                                                  \
+  auto hy = result.second;                                                     \
+                                                                               \
+  return std::make_tuple(output, hy);                                          \
+}
+
+ONE_HIDDEN_RNN(gru, ideep::rnn_kind::GRU)
+ONE_HIDDEN_RNN(rnn_tanh, ideep::rnn_kind::RNN_TANH)
+ONE_HIDDEN_RNN(rnn_relu, ideep::rnn_kind::RNN_RELU)
 
 std::tuple<Tensor, Tensor, Tensor> lstm_mkldnn_stub(
     const Tensor& input, TensorList hx, TensorList params, bool has_biases,

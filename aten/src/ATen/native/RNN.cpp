@@ -26,14 +26,14 @@ bool use_miopen(const at::Tensor& input, const double dropout_state) {
     return is_miopen_acceptable;
 }
 
-bool use_mkldnn(const Tensor& input, const double dropout_p) {
+bool use_mkldnn(const Tensor& input, const double dropout_p, const bool train) {
 #if AT_MKLDNN_ENABLED()
   if (!at::globalContext().userEnabledMkldnn()) {
     return false;
   }
   return input.options().backend() == at::Backend::CPU &&
       input.scalar_type() == kFloat &&
-      dropout_p == 0.0;
+      (!train || dropout_p == 0.0);
 #endif
   return false;
 }
@@ -1195,6 +1195,17 @@ bool _use_cudnn_rnn_flatten_weight() {
           batch_first);                                                     \
       return std::make_tuple(std::move(output), std::move(hy));             \
     }                                                                       \
+    if (use_mkldnn(_input, dropout_p, train)) {                             \
+      return at::NAME##_mkldnn_stub(_input,                                 \
+          hx,                                                               \
+          _params,                                                          \
+          has_biases,                                                       \
+          num_layers,                                                       \
+          dropout_p,                                                        \
+          train,                                                            \
+          bidirectional,                                                    \
+          batch_first);                                                     \
+    }                                                                       \
     check_device(_input, _params, hx);                                      \
     auto input = batch_first ? _input.transpose(0, 1) : _input;             \
     auto params = gather_params(_params, has_biases);                       \
@@ -1423,7 +1434,7 @@ std::tuple<Tensor, Tensor, Tensor> lstm(
               num_layers, dropout_p, train, bidirectional, batch_first);
     return std::make_tuple(std::move(output), std::move(hy), std::move(cy));
   }
-  if (use_mkldnn(_input, dropout_p)) {
+  if (use_mkldnn(_input, dropout_p, train)) {
     return at::lstm_mkldnn_stub(_input, hx, _params, has_biases,
         num_layers, dropout_p, train, bidirectional, batch_first);
   }
