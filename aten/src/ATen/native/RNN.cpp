@@ -26,9 +26,15 @@ bool use_miopen(const at::Tensor& input, const double dropout_state) {
     return is_miopen_acceptable;
 }
 
-bool use_mkldnn(const Tensor& input, const double dropout_p, const bool train) {
+bool use_mkldnn(const Tensor& input, const bool batch_first,
+    const double dropout_p, const bool train) {
 #if AT_MKLDNN_ENABLED()
   if (!at::globalContext().userEnabledMkldnn()) {
+    return false;
+  }
+  int64_t seq_length = batch_first ? input.size(1) : input.size(0);
+  // skip RNNCell in which sequence length equals to 1
+  if (seq_length == 1) {
     return false;
   }
   return input.options().backend() == at::Backend::CPU &&
@@ -1195,7 +1201,7 @@ bool _use_cudnn_rnn_flatten_weight() {
           batch_first);                                                     \
       return std::make_tuple(std::move(output), std::move(hy));             \
     }                                                                       \
-    if (use_mkldnn(_input, dropout_p, train)) {                             \
+    if (use_mkldnn(_input, batch_first, dropout_p, train)) {                \
       return at::NAME##_mkldnn_stub(_input,                                 \
           hx,                                                               \
           _params,                                                          \
@@ -1434,7 +1440,7 @@ std::tuple<Tensor, Tensor, Tensor> lstm(
               num_layers, dropout_p, train, bidirectional, batch_first);
     return std::make_tuple(std::move(output), std::move(hy), std::move(cy));
   }
-  if (use_mkldnn(_input, dropout_p, train)) {
+  if (use_mkldnn(_input, batch_first, dropout_p, train)) {
     return at::lstm_mkldnn_stub(_input, hx, _params, has_biases,
         num_layers, dropout_p, train, bidirectional, batch_first);
   }
