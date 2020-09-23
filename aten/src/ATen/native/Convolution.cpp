@@ -733,12 +733,19 @@ at::Tensor _convolution(
              "Input type (", input.toString(), ") and bias type (", bias.toString(),
              ") should be the same");
     if (!input_is_mkldnn) {
-      output = at::mkldnn_convolution(input.contiguous(), weight.contiguous(), bias.defined() ? bias.contiguous() : bias,
-                                      params.padding, params.stride, params.dilation, params.groups);
+      bool use_channels_last = input.suggest_memory_format() == at::MemoryFormat::ChannelsLast ||
+                               weight.suggest_memory_format() == at::MemoryFormat::ChannelsLast;
+      auto mkldnn_memory_format = use_channels_last ? at::MemoryFormat::ChannelsLast
+                                                    : at::MemoryFormat::Contiguous;
+      output = at::mkldnn_convolution(
+          input.contiguous(mkldnn_memory_format), weight.contiguous(mkldnn_memory_format),
+          bias.defined() ? bias.contiguous() : bias,
+          params.padding, params.stride, params.dilation, params.groups);
     } else {
       // do not call contiguous on mkldnn tensor
-      output = at::mkldnn_convolution(input, weight, bias,
-                                      params.padding, params.stride, params.dilation, params.groups);
+      output = at::mkldnn_convolution(
+          input, weight, bias,
+          params.padding, params.stride, params.dilation, params.groups);
     }
 #endif
   } else if (params.use_xnnpack(input, weight, bias)) {
