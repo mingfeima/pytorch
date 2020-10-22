@@ -2606,6 +2606,22 @@
   dispatch:
     DefaultBackend: mkldnn_convolution_backward
 
+- func: mkldnn_convolution_transpose(Tensor self, Tensor weight, Tensor? bias, int[] padding, int[] output_padding, int[] stride, int[] dilation, int groups) -> Tensor
+  use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
+  dispatch:
+    DefaultBackend: mkldnn_convolution_transpose
+
+- func: mkldnn_convolution_transpose_backward_input(int[] self_size, Tensor grad_output, Tensor weight, int[] padding, int[] output_padding, int[] stride, int[] dilation, int groups, bool bias_defined) -> Tensor
+  use_c10_dispatcher: full
+
+- func: mkldnn_convolution_transpose_backward_weights(int[] weight_size, Tensor grad_output, Tensor self, int[] padding, int[] output_padding, int[] stride, int[] dilation, int groups, bool bias_defined) -> (Tensor, Tensor)
+  use_c10_dispatcher: full
+
+- func: mkldnn_convolution_transpose_backward(Tensor self, Tensor grad_output, Tensor weight, int[] padding, int[] output_padding, int[] stride, int[] dilation, int groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+  use_c10_dispatcher: full
+  dispatch:
+    DefaultBackend: mkldnn_convolution_transpose_backward
+
 - func: miopen_batch_norm(Tensor input, Tensor weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, float exponential_average_factor, float epsilon) -> (Tensor, Tensor, Tensor)
   use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
   dispatch:
@@ -4724,6 +4740,20 @@
   python_module: nn
   dispatch:
     MkldnnCPU: mkldnn_reorder_conv3d_weight
+
+- func: mkldnn_reorder_conv_transpose2d_weight(Tensor self, int[2] padding=0, int[2] stride=1, int[2] dilation=1, int groups=1) -> Tensor
+  use_c10_dispatcher: full
+  variants: function
+  python_module: nn
+  dispatch:
+    MkldnnCPU: mkldnn_reorder_conv_transpose2d_weight
+
+- func: mkldnn_reorder_conv_transpose3d_weight(Tensor self, int[3] padding=0, int[3] stride=1, int[3] dilation=1, int groups=1) -> Tensor
+  use_c10_dispatcher: full
+  variants: function
+  python_module: nn
+  dispatch:
+    MkldnnCPU: mkldnn_reorder_conv_transpose3d_weight
 
 - func: to_mkldnn_backward(Tensor grad, Tensor input) -> Tensor
   use_c10_dispatcher: full

@@ -108,6 +108,61 @@ Tensor mkldnn_reorder_conv3d_weight(
   return new_with_itensor_mkldnn(std::move(result), self.options());
 }
 
+Tensor mkldnn_reorder_conv_transpose2d_weight(
+    const Tensor& self,
+    IntArrayRef padding,
+    IntArrayRef stride,
+    IntArrayRef dilation,
+    int64_t groups) {
+  auto w = itensor_from_mkldnn(self);
+
+  if (w.ndims() == 5) {
+    auto wdims = w.get_dims();
+    w.reshape({wdims[0] * wdims[1], wdims[2], wdims[3], wdims[4]});
+  }
+
+  auto desc =
+      ideep::convolution_transpose_forward::expected_weights_desc(
+          w.get_dims(),
+          w.get_data_type(),
+          {stride.begin(), stride.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          {dilation.begin(), dilation.end()},
+          groups,
+          ideep::algorithm::deconvolution_direct);
+  ideep::tensor result;
+  result.init(desc);
+  result.feed_from(w);
+
+  return new_with_itensor_mkldnn(std::move(result), self.options());
+}
+
+Tensor mkldnn_reorder_conv_transpose3d_weight(
+    const Tensor& self,
+    IntArrayRef padding,
+    IntArrayRef stride,
+    IntArrayRef dilation,
+    int64_t groups) {
+  auto w = itensor_from_mkldnn(self);
+
+  auto desc =
+      ideep::convolution_transpose_forward::expected_weights_desc(
+          w.get_dims(),
+          w.get_data_type(),
+          {stride.begin(), stride.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          {dilation.begin(), dilation.end()},
+          groups,
+          ideep::algorithm::deconvolution_direct);
+  ideep::tensor result;
+  result.init(desc);
+  result.feed_from(w);
+
+  return new_with_itensor_mkldnn(std::move(result), self.options());
+}
+
 #else
 
 Tensor mkldnn_to_dense(const Tensor& mkldnn_tensor) {
@@ -134,6 +189,24 @@ Tensor mkldnn_reorder_conv3d_weight(
     IntArrayRef dilation,
     int64_t groups) {
   TORCH_CHECK(false, "mkldnn_reorder_conv3d_weight: MKL-DNN build is disabled");
+}
+
+Tensor mkldnn_reorder_conv_transpose2d_weight(
+    const Tensor& self,
+    IntArrayRef padding,
+    IntArrayRef stride,
+    IntArrayRef dilation,
+    int64_t groups) {
+  TORCH_CHECK(false, "mkldnn_reorder_conv_transpose2d_weight: MKL-DNN build is disabled");
+}
+
+Tensor mkldnn_reorder_conv_transpose3d_weight(
+    const Tensor& self,
+    IntArrayRef padding,
+    IntArrayRef stride,
+    IntArrayRef dilation,
+    int64_t groups) {
+  TORCH_CHECK(false, "mkldnn_reorder_conv_transpose3d_weight: MKL-DNN build is disabled");
 }
 
 #endif // AT_MKLDNN_ENABLED()

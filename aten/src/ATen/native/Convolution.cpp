@@ -236,7 +236,6 @@ auto ConvParams::use_mkldnn(const at::Tensor& input, const at::Tensor& weight) c
   return (input.is_mkldnn()) || // input is mkldnn Tensor
     (input.options().backend() == at::Backend::CPU &&
      input.scalar_type() == kFloat && // only on CPU Float Tensors
-     !transposed && // or transposed tensors
      (groups > 1 || weight.size(2) > 3 || input.size(0) > 1
       || input.size(0)*input.size(1)*input.size(2)*input.size(3) > 20480)); // for some case, native is faster
 #endif
@@ -732,20 +731,40 @@ at::Tensor _convolution(
     TORCH_CHECK(!bias.defined() || (input.options().type_equal(bias.options())),
              "Input type (", input.toString(), ") and bias type (", bias.toString(),
              ") should be the same");
-    if (!input_is_mkldnn) {
-      bool use_channels_last = input.suggest_memory_format() == at::MemoryFormat::ChannelsLast ||
-                               weight.suggest_memory_format() == at::MemoryFormat::ChannelsLast;
-      auto mkldnn_memory_format = use_channels_last ? at::MemoryFormat::ChannelsLast
-                                                    : at::MemoryFormat::Contiguous;
-      output = at::mkldnn_convolution(
-          input.contiguous(mkldnn_memory_format), weight.contiguous(mkldnn_memory_format),
-          bias.defined() ? bias.contiguous() : bias,
-          params.padding, params.stride, params.dilation, params.groups);
+
+    if (params.transposed) {
+      if (!input_is_mkldnn) {
+        bool use_channels_last = input.suggest_memory_format() == at::MemoryFormat::ChannelsLast ||
+                                 weight.suggest_memory_format() == at::MemoryFormat::ChannelsLast;
+        auto mkldnn_memory_format = use_channels_last ? at::MemoryFormat::ChannelsLast
+                                                      : at::MemoryFormat::Contiguous;
+        output = at::mkldnn_convolution_transpose(
+            input.contiguous(mkldnn_memory_format), weight.contiguous(mkldnn_memory_format),
+            bias.defined() ? bias.contiguous() : bias,
+            params.padding, params.output_padding, params.stride, params.dilation, params.groups);
+      } else {
+        // do not call contiguous on mkldnn tensor
+        output = at::mkldnn_convolution_transpose(
+            input, weight, bias,
+            params.padding, params.output_padding, params.stride, params.dilation, params.groups
+        );
+      }
     } else {
-      // do not call contiguous on mkldnn tensor
-      output = at::mkldnn_convolution(
-          input, weight, bias,
-          params.padding, params.stride, params.dilation, params.groups);
+      if (!input_is_mkldnn) {
+        bool use_channels_last = input.suggest_memory_format() == at::MemoryFormat::ChannelsLast ||
+                                 weight.suggest_memory_format() == at::MemoryFormat::ChannelsLast;
+        auto mkldnn_memory_format = use_channels_last ? at::MemoryFormat::ChannelsLast
+                                                      : at::MemoryFormat::Contiguous;
+        output = at::mkldnn_convolution(
+            input.contiguous(mkldnn_memory_format), weight.contiguous(mkldnn_memory_format),
+            bias.defined() ? bias.contiguous() : bias,
+            params.padding, params.stride, params.dilation, params.groups);
+      } else {
+        // do not call contiguous on mkldnn tensor
+        output = at::mkldnn_convolution(
+            input, weight, bias,
+            params.padding, params.stride, params.dilation, params.groups);
+      }
     }
 #endif
   } else if (params.use_xnnpack(input, weight, bias)) {
