@@ -56,26 +56,32 @@ inline ideep::tensor get_mkldnn_tensor(const Tensor& tensor) {
 }
 
 // Reorder tensor in blocked format to plain formats
-// according to memory formats
+// For contiguous memory format, it is safe to reorder from blocked
+// format to plain format (oihw);
+// For channels last memory format, directly reorder from blocked format to
+// plain format (ohwi) might fail, so we take two steps as:
+//   blocked -> oihw -> ohwi
+// this is only used for reordering grad_weight in backward on channels last path
 Tensor reorder_mkldnn_tensor(
-    const ideep::tensor& mkldnn_tensor,
+    ideep::tensor& mkldnn_tensor,
     const TensorOptions& options,
     at::MemoryFormat memory_format = at::MemoryFormat::Contiguous) {
-  if (memory_format == at::MemoryFormat::ChannelsLast) {
-    auto ndims = mkldnn_tensor.ndims();
-    TORCH_CHECK(ndims == 4 || ndims == 5, "ChannelsLast memory format supports only 4D or 5D tensor");
+  // contiguous path
+  Tensor cpu_tensor = mkldnn_to_dense(
+      new_with_itensor_mkldnn(std::move(mkldnn_tensor), options));
+
+  if (memory_format == at::MemoryFormat::Contiguous) {
+    return cpu_tensor;
+  } else if (memory_format == at::MemoryFormat::ChannelsLast) {
+    // channels last path
+    TORCH_CHECK(cpu_tensor.ndimension() == 4, "ChannelsLast memory format supports only 4D tensor");
+    Tensor cpu_tensor_cl = at::empty_like(cpu_tensor, at::MemoryFormat::ChannelsLast);
+    auto cpu_tensor_cl_view = itensor_view_from_dense(cpu_tensor_cl);
+    cpu_tensor_cl_view.reorder_from(itensor_view_from_dense(cpu_tensor));
+    return cpu_tensor_cl;
+  } else {
+    TORCH_CHECK(false, "Unsupported memory format. Supports only ChannelsLast, Contiguous");
   }
-
-  auto dims = mkldnn_tensor.get_dims();
-  Tensor cpu_tensor = at::empty(
-    std::vector<int64_t>(dims.begin(), dims.end()),
-    options.layout(c10::kStrided),
-    memory_format);
-  if (mkldnn_tensor.is_empty()) return cpu_tensor;
-  ideep::tensor cpu_tensor_view = itensor_view_from_dense(cpu_tensor);
-  cpu_tensor_view.reorder_from(mkldnn_tensor);
-
-  return cpu_tensor;
 }
 
 } // anonymous namespace
