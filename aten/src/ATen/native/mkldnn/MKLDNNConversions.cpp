@@ -114,12 +114,10 @@ Tensor mkldnn_reorder_conv_transpose2d_weight(
     IntArrayRef stride,
     IntArrayRef dilation,
     int64_t groups) {
-  auto w = itensor_from_mkldnn(self);
-
-  if (w.ndims() == 5) {
-    auto wdims = w.get_dims();
-    w.reshape({wdims[0] * wdims[1], wdims[2], wdims[3], wdims[4]});
+  if (groups > 1) {
+    return self;
   }
+  auto w = itensor_from_mkldnn(self);
 
   auto desc =
       ideep::convolution_transpose_forward::expected_weights_desc(
@@ -144,6 +142,9 @@ Tensor mkldnn_reorder_conv_transpose3d_weight(
     IntArrayRef stride,
     IntArrayRef dilation,
     int64_t groups) {
+  if (groups > 1) {
+    return self;
+  }
   auto w = itensor_from_mkldnn(self);
 
   auto desc =

@@ -295,7 +295,7 @@ Tensor mkldnn_convolution_transpose(
   auto x = get_mkldnn_tensor(input);
   auto w = get_mkldnn_tensor(weight);
   // mkldnn transposed convolution has weight in logical order of OIHW or OIDHW,
-  // while PyTorch has IOHW or IODHW, `._tranpose()` switches trides (no memory copy).
+  // while PyTorch has IOHW or IODHW, `._tranpose()` switches strides (no memory copy).
   w.transpose_(0, 1);
 
   ideep::tensor y;

@@ -163,6 +163,19 @@ class _MkldnnConvTransposeNd(torch.jit.ScriptModule):
             self.groups)
 
 
+class MkldnnConvTranspose1d(_MkldnnConvTransposeNd):
+    def __init__(self, dense_module):
+        super(MkldnnConvTranspose1d, self).__init__(dense_module)
+
+        self.register_buffer('weight', dense_module.weight.to_mkldnn())
+
+    @torch.jit.script_method
+    def __setstate__(self, state):
+        self.weight = state[0].to_mkldnn()
+        self.bias = state[1].to_mkldnn()
+        self.training = state[2]
+
+
 class MkldnnConvTranspose2d(_MkldnnConvTransposeNd):
     def __init__(self, dense_module):
         super(MkldnnConvTranspose2d, self).__init__(dense_module)
@@ -271,6 +284,8 @@ def to_mkldnn(module):
             return MkldnnConv2d(m)
         elif isinstance(m, torch.nn.Conv3d):
             return MkldnnConv3d(m)
+        elif isinstance(m, torch.nn.ConvTranspose1d):
+            return MkldnnConvTranspose1d(m)
         elif isinstance(m, torch.nn.ConvTranspose2d):
             return MkldnnConvTranspose2d(m)
         elif isinstance(m, torch.nn.ConvTranspose3d):
