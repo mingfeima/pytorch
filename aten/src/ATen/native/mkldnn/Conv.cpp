@@ -120,48 +120,72 @@ Tensor mkldnn_convolution(
     int64_t groups) {
   auto output_sizes = conv_output_size(input.sizes(), weight.sizes(), padding, stride, dilation);
   auto output = at::empty({0}, input.options());
-  bool is_channels_last = input.suggest_memory_format() == at::MemoryFormat::ChannelsLast;
+  bool is_plain_format = !input.is_mkldnn();
 
   const ideep::tensor x = get_mkldnn_tensor(input);
   const ideep::tensor w = get_mkldnn_tensor(weight);
 
   ideep::tensor y;
-  if (is_channels_last) {
+  if (is_plain_format) {
     output.resize_(output_sizes, input.suggest_memory_format());
     y = get_mkldnn_tensor(output);
-  }
-  if (bias.defined()) {
-    const ideep::tensor b = get_mkldnn_tensor(bias);
-    ideep::convolution_forward::compute(
-        x,
-        w,
-        b,
-        {output_sizes.cbegin(), output_sizes.cend()},
-        y,
-        {stride.begin(), stride.end()},
-        {dilation.begin(), dilation.end()},
-        {padding.begin(), padding.end()},
-        {padding.begin(), padding.end()},
-        groups);
+
+    if (bias.defined()) {
+      const ideep::tensor b = get_mkldnn_tensor(bias);
+      ideep::convolution_forward::compute</*plain*/true>(
+          x,
+          w,
+          b,
+          {output_sizes.cbegin(), output_sizes.cend()},
+          y,
+          {stride.begin(), stride.end()},
+          {dilation.begin(), dilation.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          groups);
+    } else {
+      ideep::convolution_forward::compute</*plain*/true>(
+          x,
+          w,
+          {output_sizes.cbegin(), output_sizes.cend()},
+          y,
+          {stride.begin(), stride.end()},
+          {dilation.begin(), dilation.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          groups);
+    }
   } else {
-    ideep::convolution_forward::compute(
-        x,
-        w,
-        {output_sizes.cbegin(), output_sizes.cend()},
-        y,
-        {stride.begin(), stride.end()},
-        {dilation.begin(), dilation.end()},
-        {padding.begin(), padding.end()},
-        {padding.begin(), padding.end()},
-        groups);
+    if (bias.defined()) {
+      const ideep::tensor b = get_mkldnn_tensor(bias);
+      ideep::convolution_forward::compute</*plain*/false>(
+          x,
+          w,
+          b,
+          {output_sizes.cbegin(), output_sizes.cend()},
+          y,
+          {stride.begin(), stride.end()},
+          {dilation.begin(), dilation.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          groups);
+    } else {
+      ideep::convolution_forward::compute</*plain*/false>(
+          x,
+          w,
+          {output_sizes.cbegin(), output_sizes.cend()},
+          y,
+          {stride.begin(), stride.end()},
+          {dilation.begin(), dilation.end()},
+          {padding.begin(), padding.end()},
+          {padding.begin(), padding.end()},
+          groups);
+    }
   }
 
-  if (input.is_mkldnn()) {
+  if (!is_plain_format) {
     return new_with_itensor_mkldnn(std::move(y), input.options());
-  } else if (!is_channels_last) {
-    return reorder_mkldnn_tensor(y, input.options());
   } else {
-    TORCH_INTERNAL_ASSERT(y.get_desc().is_nhwc());
     return output;
   }
 }
