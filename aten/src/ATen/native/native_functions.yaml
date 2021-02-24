@@ -2625,6 +2625,12 @@
   dispatch:
     CPU, CUDA: amin_out
 
+# Fused optimizer for LAMB
+- func: lamb_fused_step(Tensor param, Tensor exp_avg, Tensor exp_avg_sq, Tensor grad, int step, float beta1, float beta2, float learning_rate, float weight_decay, float eps) -> (Tensor, Tensor, Tensor)
+  use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
+  dispatch:
+    CPU: lamb_fused_step_cpu
+
 - func: mkldnn_convolution(Tensor self, Tensor weight, Tensor? bias, int[] padding, int[] stride, int[] dilation, int groups) -> Tensor
   use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
   dispatch:

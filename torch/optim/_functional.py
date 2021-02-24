@@ -199,6 +199,59 @@ def adadelta(params: List[Tensor],
         param.add_(delta, alpha=-lr)
         acc_delta.mul_(rho).addcmul_(delta, delta, value=1 - rho)
 
+def lamb(params: List[Tensor],
+         grads: List[Tensor],
+         exp_avgs: List[Tensor],
+         exp_avg_sqs: List[Tensor],
+         state_steps: List[int],
+         beta1: float,
+         beta2: float,
+         lr: float,
+         weight_decay: float,
+         eps: float,
+         fused: bool):
+    r"""Functional API that performs Lamb algorithm computation.
+
+    See :class:`~torch.optim.Lamb` for details.
+    """
+
+    for i, param in enumerate(params):
+
+        grad = grads[i]
+        exp_avg = exp_avgs[i]
+        exp_avg_sq = exp_avg_sqs[i]
+        step = state_steps[i]
+
+        if fused:
+            torch.lamb_fused_step(
+                param,
+                exp_avg,
+                exp_avg_sq,
+                grad, step,
+                beta1,
+                beta2,
+                lr,
+                weight_decay,
+                eps)
+        else:
+            bias_correction1 = 1 - beta1 ** step
+            bias_correction2 = 1 - beta2 ** step
+
+            # Decay the first and second moment running average coefficient
+            exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+            adam_step = (exp_avg / bias_correction1) / ((exp_avg_sq / bias_correction2).sqrt() + eps)
+
+            if weight_decay != 0:
+                adam_step.add_(param, alpha=weight_decay)
+
+            weight_norm = param.norm(p=2)
+            rtw_norm = adam_step.norm(p=2)
+            true_ratio = weight_norm / rtw_norm
+
+            param.add_(adam_step, alpha=-lr * true_ratio)
+
 
 def rmsprop(params: List[Tensor],
             grads: List[Tensor],
