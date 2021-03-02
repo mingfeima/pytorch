@@ -2631,6 +2631,11 @@
   dispatch:
     CPU: lamb_fused_step_cpu
 
+- func: adagrad_fused_step(Tensor param, Tensor grad, Tensor state_sum, int step, float learning_rate, float weight_decay, float lr_decay, float eps) -> (Tensor, Tensor)
+  use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
+  dispatch:
+    CPU: adagrad_fused_step_cpu
+
 - func: mkldnn_convolution(Tensor self, Tensor weight, Tensor? bias, int[] padding, int[] stride, int[] dilation, int groups) -> Tensor
   use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
   dispatch:

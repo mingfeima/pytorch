@@ -58,6 +58,49 @@ std::tuple<Tensor, Tensor, Tensor> lamb_fused_step_cpu(
   return std::make_tuple(param_, exp_avg_, exp_avg_sq_);
 }
 
+std::tuple<Tensor, Tensor> adagrad_fused_step_cpu(
+    const Tensor& param_,
+    const Tensor& grad_,
+    const Tensor& state_sum_,
+    int64_t step,
+    double learning_rate,
+    double weight_decay,
+    double lr_decay,
+    double eps) {
+  TORCH_CHECK(learning_rate >= 0,
+      "Expect learning rate >= 0.0, got ", learning_rate);
+  TORCH_CHECK(lr_decay >= 0,
+      "Expect lr_decay >=0.0 , got ", lr_decay);
+  TORCH_CHECK(eps >= 0,
+      "Expect eps >= 0.0, got ", eps);
+  TORCH_CHECK(weight_decay >= 0,
+      "Expect weight_decay >= 0.0, got ", weight_decay);
+
+  TORCH_CHECK(param_.sizes() == grad_.sizes(),
+      "Expect param and grad have the same sizes, param sizes: ",
+      param_.sizes(), "; grad sizes: ", grad_.sizes());
+  TORCH_CHECK(param_.sizes() == state_sum_.sizes(),
+      "Expect param and state_sum have the same sizes, param sizes: ",
+      param_.sizes(), "; state_sum sizes: ", state_sum_.sizes());
+
+  auto param = param_.contiguous();
+  auto grad = grad_.contiguous();
+  auto state_sum = state_sum_.contiguous();
+
+  adagrad_fused_step_kernel(
+      kCPU, param, grad, state_sum, step, learning_rate, weight_decay, lr_decay, eps);
+
+  if (!param_.is_contiguous()) {
+    param_.copy_(param);
+  }
+  if (!state_sum_.is_contiguous()) {
+    state_sum_.copy_(state_sum);
+  }
+
+  return std::make_tuple(param_, state_sum_);
+}
+
 DEFINE_DISPATCH(lamb_fused_step_kernel);
+DEFINE_DISPATCH(adagrad_fused_step_kernel);
 
 }} // at::native

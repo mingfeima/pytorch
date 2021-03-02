@@ -20,13 +20,26 @@ def adagrad(params: List[Tensor],
             lr: float,
             weight_decay: float,
             lr_decay: float,
-            eps: float):
+            eps: float,
+            fused: bool):
     r"""Functional API that performs Adagrad algorithm computation.
 
     See :class:`~torch.optim.Adagrad` for details.
     """
 
     for (param, grad, state_sum, step) in zip(params, grads, state_sums, state_steps):
+        if fused:
+            torch.adagrad_fused_step(
+                param,
+                grad,
+                state_sum,
+                step,
+                lr,
+                weight_decay,
+                lr_decay,
+                eps)
+            continue
+
         if weight_decay != 0:
             if grad.is_sparse:
                 raise RuntimeError("weight_decay option is not compatible with sparse gradients")
@@ -233,24 +246,25 @@ def lamb(params: List[Tensor],
                 lr,
                 weight_decay,
                 eps)
-        else:
-            bias_correction1 = 1 - beta1 ** step
-            bias_correction2 = 1 - beta2 ** step
+            continue
 
-            # Decay the first and second moment running average coefficient
-            exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        bias_correction1 = 1 - beta1 ** step
+        bias_correction2 = 1 - beta2 ** step
 
-            adam_step = (exp_avg / bias_correction1) / ((exp_avg_sq / bias_correction2).sqrt() + eps)
+        # Decay the first and second moment running average coefficient
+        exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-            if weight_decay != 0:
-                adam_step.add_(param, alpha=weight_decay)
+        adam_step = (exp_avg / bias_correction1) / ((exp_avg_sq / bias_correction2).sqrt() + eps)
 
-            weight_norm = param.norm(p=2)
-            rtw_norm = adam_step.norm(p=2)
-            true_ratio = weight_norm / rtw_norm
+        if weight_decay != 0:
+            adam_step.add_(param, alpha=weight_decay)
 
-            param.add_(adam_step, alpha=-lr * true_ratio)
+        weight_norm = param.norm(p=2)
+        rtw_norm = adam_step.norm(p=2)
+        true_ratio = weight_norm / rtw_norm
+
+        param.add_(adam_step, alpha=-lr * true_ratio)
 
 
 def rmsprop(params: List[Tensor],

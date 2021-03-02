@@ -141,6 +141,58 @@ void cpu_lamb_fused_step(
   });
 }
 
+template <typename scalar_t>
+void cpu_adagrad_fused_step(
+    const Tensor& param,
+    const Tensor& grad,
+    const Tensor& state_sum,
+    int64_t step,
+    double learning_rate,
+    double weight_decay,
+    double lr_decay,
+    double eps) {
+  scalar_t* param_data = param.data_ptr<scalar_t>();
+  scalar_t* grad_data = grad.data_ptr<scalar_t>();
+  scalar_t* state_sum_data = state_sum.data_ptr<scalar_t>();
+
+  // update learning rate
+  double clr = learning_rate / (1 + (step - 1) * lr_decay);
+
+  using Vec = vec256::Vec256<scalar_t>;
+
+  int64_t grain_size = 512;
+
+  // purely element-wise operations
+  at::parallel_for(0, param.numel(), grain_size, [&](int64_t begin, int64_t end) {
+    // local pointers
+    scalar_t* param_ptr = param_data + begin;
+    scalar_t* grad_ptr = grad_data + begin;
+    scalar_t* state_sum_ptr = state_sum_data + begin;
+
+    const int64_t size = end - begin;
+
+    int64_t d = 0;
+    for (; d < size - (size % Vec::size()); d += Vec::size()) {
+      Vec param_vec = Vec::loadu(param_ptr + d);
+      Vec grad_vec = Vec::loadu(grad_ptr + d) + param_vec * Vec(scalar_t(weight_decay));
+
+      Vec sum_vec = Vec::loadu(state_sum_ptr + d) + grad_vec * grad_vec;
+      sum_vec.store(state_sum_ptr + d);
+
+      Vec std_vec = sum_vec.sqrt() + Vec(scalar_t(eps));
+      param_vec = param_vec - grad_vec / std_vec * Vec(scalar_t(clr));
+      param_vec.store(param_ptr + d);
+    }
+    for (; d < size; d++) {
+      scalar_t grad_val = grad_ptr[d] + param_ptr[d] * weight_decay;
+      state_sum_ptr[d] += grad_val * grad_val;
+
+      scalar_t std_val = std::sqrt(state_sum_ptr[d]) + eps;
+      param_ptr[d] -= grad_val / std_val * clr;
+    }
+  });
+}
+
 void lamb_fused_step_kernel_impl(
     const Tensor& param,
     const Tensor& exp_avg,
@@ -158,8 +210,24 @@ void lamb_fused_step_kernel_impl(
   });
 }
 
+void adagrad_fused_step_kernel_impl(
+    const Tensor& param,
+    const Tensor& grad,
+    const Tensor& state_sum,
+    int64_t step,
+    double learning_rate,
+    double weight_decay,
+    double lr_decay,
+    double eps) {
+  AT_DISPATCH_FLOATING_TYPES(param.scalar_type(), "adagrad_fused_step", [&] {
+    cpu_adagrad_fused_step<scalar_t>(
+        param, grad, state_sum, step, learning_rate, weight_decay, lr_decay, eps);
+  });
+}
+
 } // anonymous namespace
 
 REGISTER_DISPATCH(lamb_fused_step_kernel, &lamb_fused_step_kernel_impl);
+REGISTER_DISPATCH(adagrad_fused_step_kernel, &adagrad_fused_step_kernel_impl);
 
 }} // at::native
