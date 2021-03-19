@@ -28,7 +28,7 @@ inline void _vec_log_softmax_lastdim(
     scalar_t* output_data_base,
     int64_t outer_size,
     int64_t dim_size) {
-  using Vec = vec256::Vec256<scalar_t>;
+  using Vec = vec256::Vec256<vec256::vec_scalar_t<scalar_t>>;
   static constexpr int64_t CHUNK_SIZE = (128 / sizeof(scalar_t)) * Vec::size();
   int64_t grain_size = internal::GRAIN_SIZE / (16 * dim_size * CHUNK_SIZE);
   if (grain_size < CHUNK_SIZE)
@@ -48,7 +48,7 @@ inline void _vec_log_softmax_lastdim(
           for (int64_t j = 0; j < loop_end; j++) {
             int64_t i = ii + j;
             scalar_t* input_data = input_data_base + i * dim_size;
-            max_input_arr[j] = vec256::reduce_all<scalar_t>(
+            max_input_arr[j] = vec256::ReduceAll<scalar_t>::apply(
                 [](Vec& x, Vec& y) { return vec256::maximum(x, y); },
                 input_data,
                 dim_size);
@@ -57,7 +57,7 @@ inline void _vec_log_softmax_lastdim(
             int64_t i = ii + j;
             scalar_t* input_data = input_data_base + i * dim_size;
             scalar_t max_input = max_input_arr[j];
-            tmp_sum_scalar[j] = vec256::map_reduce_all<scalar_t>(
+            tmp_sum_scalar[j] = vec256::MapReduceAll<scalar_t>::apply(
                 [max_input](Vec x) { return (x - Vec(max_input)).exp(); },
                 [](Vec x, Vec y) { return x + y; },
                 input_data,
@@ -65,7 +65,7 @@ inline void _vec_log_softmax_lastdim(
           }
           // See [Note AVX-SSE transitions] for why this should call the
           // vectorized version (aside from perf improvements).
-          vec256::map(
+          vec256::Map<scalar_t>::apply(
               [](Vec x) { return x.log(); },
               tmp_sum_scalar,
               tmp_sum_scalar,
@@ -82,7 +82,7 @@ inline void _vec_log_softmax_lastdim(
             // is small, if we compute `max_input` plus `tmp_sum` before,
             // there would be a numerical problem. See an example in
             // https://github.com/pytorch/pytorch/issues/11752#issuecomment-422883379
-            vec256::map(
+            vec256::Map<scalar_t>::apply(
                 [tmp_sum, max_input](Vec x) { return x - Vec(max_input) - Vec(tmp_sum); },
                 output_data,
                 input_data,
