@@ -77,7 +77,7 @@ template <typename scalar_t, typename MapOp, typename ReduceOp>
 inline scalar_t map_reduce_all(
     const MapOp& map_fun,
     const ReduceOp& red_fun,
-    scalar_t* data,
+    const scalar_t* data,
     int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size())

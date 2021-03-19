@@ -6,8 +6,8 @@
 
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
-#include <ATen/cpu/vec256/functional.h>
 #include <ATen/cpu/vec256/vec256.h>
+#include <ATen/cpu/vec256/functional_utils.h>
 #include <c10/util/Optional.h>
 
 // [Note AVX-SSE transitions] In general we avoid calls into cmath for code
@@ -98,7 +98,7 @@ inline void _vec_softmax_lastdim(
     scalar_t* output_data_base,
     int64_t outer_size,
     int64_t dim_size) {
-  using Vec = vec256::Vec256<scalar_t>;
+  using Vec = vec256::Vec256<vec256::vec_scalar_t<scalar_t>>;
   int64_t grain_size = internal::GRAIN_SIZE / (16 * dim_size);
   if (grain_size < 1)
     grain_size = 1;
@@ -111,19 +111,19 @@ inline void _vec_softmax_lastdim(
         for (int64_t i = begin; i < end; i++) {
           scalar_t* input_data = input_data_base + i * dim_size;
           scalar_t* output_data = output_data_base + i * dim_size;
-          scalar_t max_input = vec256::reduce_all<scalar_t>(
+          scalar_t max_input = vec256::ReduceAll<scalar_t>::apply(
               [](Vec& x, Vec& y) { return vec256::maximum(x, y); },
               input_data,
               dim_size);
-          vec256::map(
+          vec256::Map<scalar_t>::apply(
               [max_input](Vec x) { return (x - Vec(max_input)).exp(); },
               output_data,
               input_data,
               dim_size);
-          scalar_t tmp_sum = vec256::reduce_all<scalar_t>(
+          scalar_t tmp_sum = vec256::ReduceAll<scalar_t>::apply(
               [](Vec x, Vec y) { return x + y; }, output_data, dim_size);
           tmp_sum = 1 / tmp_sum;
-          vec256::map(
+          vec256::Map<scalar_t>::apply(
               [tmp_sum](Vec x) { return x * Vec(tmp_sum); },
               output_data,
               output_data,
@@ -139,7 +139,7 @@ inline void _vec_host_softmax_backward_lastdim(
     scalar_t* output_data_base,
     int64_t outer_size,
     int64_t dim_size) {
-  using Vec = vec256::Vec256<scalar_t>;
+  using Vec = vec256::Vec256<vec256::vec_scalar_t<scalar_t>>;
   int64_t grain_size = internal::GRAIN_SIZE / (16 * dim_size);
   if (grain_size < 1)
     grain_size = 1;
@@ -155,10 +155,10 @@ inline void _vec_host_softmax_backward_lastdim(
           scalar_t* output_data = output_data_base + i * dim_size;
           scalar_t sum;
           if (log_softmax) {
-            sum = vec256::reduce_all<scalar_t>(
+            sum = vec256::ReduceAll<scalar_t>::apply(
                 [](Vec& x, Vec& y) { return x + y; }, grad_data, dim_size);
           } else {
-            sum = vec256::map2_reduce_all<scalar_t>(
+            sum = vec256::Map2ReduceAll<scalar_t>::apply(
                 [](Vec x, Vec y) { return x * y; },
                 [](Vec x, Vec y) { return x + y; },
                 grad_data,
@@ -166,14 +166,14 @@ inline void _vec_host_softmax_backward_lastdim(
                 dim_size);
           }
           if (log_softmax) {
-            vec256::map2(
+            vec256::Map2<scalar_t>::apply(
                 [sum](Vec x, Vec y) { return x - ((y.exp()) * Vec(sum)); },
                 grad_input_data,
                 grad_data,
                 output_data,
                 dim_size);
           } else {
-            vec256::map2(
+            vec256::Map2<scalar_t>::apply(
                 [sum](Vec x, Vec y) { return (x - Vec(sum)) * y; },
                 grad_input_data,
                 grad_data,
@@ -223,10 +223,13 @@ struct vec_host_softmax_backward_lastdim {
   }
 };
 
-static void softmax_lastdim_kernel_impl(Tensor& result, const Tensor& self) {
-  AT_DISPATCH_FLOATING_TYPES(self.scalar_type(), "softmax_lastdim_kernel_impl", [&] {
-    vec_host_softmax_lastdim<scalar_t, false>::apply(result, self);
-  });
+static void softmax_lastdim_kernel_impl(
+    Tensor& result,
+    const Tensor& self) {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+      at::ScalarType::BFloat16, self.scalar_type(),
+      "softmax_lastdim_kernel_impl",
+      [&] { vec_host_softmax_lastdim<scalar_t, false>::apply(result, self); });
 }
 
 static void log_softmax_lastdim_kernel_impl(
@@ -242,8 +245,9 @@ static void softmax_backward_lastdim_kernel_impl(
     Tensor& grad_input,
     const Tensor& grad,
     const Tensor& output) {
-  AT_DISPATCH_FLOATING_TYPES(
-      grad.scalar_type(), "softmax_backward_lastdim_kernel_impl", [&] {
+  AT_DISPATCH_FLOATING_TYPES_AND(
+      at::ScalarType::BFloat16, grad.scalar_type(),
+      "softmax_backward_lastdim_kernel_impl", [&] {
         vec_host_softmax_backward_lastdim<scalar_t, false>::apply(
             grad_input, grad, output);
       });

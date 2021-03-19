@@ -644,6 +644,39 @@ inline void convert(const BFloat16* src, BFloat16* dst, int64_t n) {
 }
 
 template <>
+inline void convert(const BFloat16* src, float* dst, int64_t n) {
+  int64_t i;
+#pragma unroll
+  for (i = 0; i <= (n - Vec256<BFloat16>::size()); i += Vec256<BFloat16>::size()) {
+    __m256 vdst1, vdst2;
+    __m256i vsrc = _mm256_loadu_si256(reinterpret_cast<__m256i*>((void*)(src + i)));
+    cvtbf16_fp32(vsrc, vdst1, vdst2);
+    _mm256_storeu_ps(dst + i, vdst1);
+    _mm256_storeu_ps(dst + i + Vec256<float>::size(), vdst2);
+  }
+#pragma unroll
+  for (; i < n; i++) {
+    dst[i] = src[i];
+  }
+}
+
+template <>
+inline void convert(const float* src, BFloat16* dst, int64_t n) {
+  int64_t i;
+#pragma unroll
+  for (i = 0; i <= (n - Vec256<BFloat16>::size()); i += Vec256<BFloat16>::size()) {
+    __m256 vsrc1 = _mm256_loadu_ps(src + i);
+    __m256 vsrc2 = _mm256_loadu_ps(src + i + Vec256<float>::size());
+    __m256i vdst = cvtfp32_bf16(vsrc1, vsrc2);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>((void*)(dst + i)), vdst);
+  }
+#pragma unroll
+  for (; i < n; i++) {
+    dst[i] = src[i];
+  }
+}
+
+template <>
 Vec256<BFloat16> inline fmadd(const Vec256<BFloat16>& a,
     const Vec256<BFloat16>& b, const Vec256<BFloat16>& c) {
   __m256 a_lo, a_hi;
@@ -655,6 +688,39 @@ Vec256<BFloat16> inline fmadd(const Vec256<BFloat16>& a,
   auto o1 = _mm256_fmadd_ps(a_lo, b_lo, c_lo);
   auto o2 = _mm256_fmadd_ps(a_hi, b_hi, c_hi);
   return cvtfp32_bf16(o1, o2);
+}
+
+inline std::tuple<Vec256<float>, Vec256<float>> convert_bfloat16_float(const Vec256<BFloat16>& a) {
+  __m256 o1, o2;
+  cvtbf16_fp32(__m256i(a), o1, o2);
+  return std::make_tuple(o1, o2);
+}
+
+inline Vec256<BFloat16> convert_float_bfloat16(const Vec256<float>& a, const Vec256<float>& b) {
+ return cvtfp32_bf16(__m256(a), __m256(b));
+}
+
+#else //defined(CPU_CAPABILITY_AVX2) && !defined(_MSC_VER)
+
+inline std::tuple<Vec256<float>, Vec256<float>> convert_bfloat16_float(const Vec256<BFloat16>& a) {
+  constexpr int64_t K = Vec256<BFloat16>::size();
+  float arr[K];
+  BFloat16 arr2[K];
+  a.store(arr2);
+  convert(arr2, arr, K);
+  return std::make_tuple(
+      Vec256<float>::loadu(arr),
+      Vec256<float>::loadu(arr + Vec256<float>::size()));
+}
+
+inline Vec256<BFloat16> convert_float_bfloat16(const Vec256<float>& a, const Vec256<float>& b) {
+  constexpr int64_t K = Vec256<BFloat16>::size();
+  float arr[K];
+  BFloat16 arr2[K];
+  a.store(arr);
+  b.store(arr + Vec256<float>::size());
+  convert(arr, arr2, K);
+  return Vec256<BFloat16>::loadu(arr2);
 }
 
 #endif
