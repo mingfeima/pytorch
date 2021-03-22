@@ -704,8 +704,8 @@ inline Vec256<BFloat16> convert_float_bfloat16(const Vec256<float>& a, const Vec
 
 inline std::tuple<Vec256<float>, Vec256<float>> convert_bfloat16_float(const Vec256<BFloat16>& a) {
   constexpr int64_t K = Vec256<BFloat16>::size();
-  float arr[K];
-  BFloat16 arr2[K];
+  __at_align32__ float arr[K];
+  __at_align32__ BFloat16 arr2[K];
   a.store(arr2);
   convert(arr2, arr, K);
   return std::make_tuple(
@@ -715,8 +715,8 @@ inline std::tuple<Vec256<float>, Vec256<float>> convert_bfloat16_float(const Vec
 
 inline Vec256<BFloat16> convert_float_bfloat16(const Vec256<float>& a, const Vec256<float>& b) {
   constexpr int64_t K = Vec256<BFloat16>::size();
-  float arr[K];
-  BFloat16 arr2[K];
+  __at_align32__ float arr[K];
+  __at_align32__ BFloat16 arr2[K];
   a.store(arr);
   b.store(arr + Vec256<float>::size());
   convert(arr, arr2, K);
@@ -724,5 +724,27 @@ inline Vec256<BFloat16> convert_float_bfloat16(const Vec256<float>& a, const Vec
 }
 
 #endif
+
+struct Vec2f {
+  Vec256<float> val0, val1;
+  Vec2f() {}
+  Vec2f(float v) : val0(v), val1(v) {}
+  Vec2f(Vec256<float> v0, Vec256<float> v1) : val0(v0), val1(v1) {}
+  operator Vec256<BFloat16>() const {
+    return convert_float_bfloat16(val0, val1);
+  }
+};
+inline Vec2f& operator+= (Vec2f& a, const Vec2f& b) {
+  a.val0 += b.val0;
+  a.val1 += b.val1;
+  return a;
+}
+inline Vec2f& operator+= (Vec2f& a, const Vec256<BFloat16>& b) {
+  Vec256<float> b0, b1;
+  std::tie(b0, b1) = convert_bfloat16_float(b);
+  a.val0 += b0;
+  a.val1 += b1;
+  return a;
+}
 
 }}}
