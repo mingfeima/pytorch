@@ -4,6 +4,7 @@
 
 #include <ATen/Dispatch.h>
 #include <ATen/cpu/vec256/vec256.h>
+#include <ATen/cpu/vec256/functional.h>
 #include <ATen/native/ReduceOps.h>
 #include <ATen/native/ReduceOpsUtils.h>
 #include <ATen/native/TensorIterator.h>
@@ -17,6 +18,90 @@
 namespace at { namespace native { namespace {
 
 using namespace vec256;
+
+template <typename scalar_t>
+static inline void cpu_cumsum_lastdim_kernel(
+    Tensor& result,
+    const Tensor& self,
+    int64_t dim) {
+  const auto input_ndim = self.dim();
+  TORCH_CHECK(dim == input_ndim - 1,
+      "cpu_cumsum_lastdim_kernel: expect dim to be ", input_ndim - 1, " got ", dim);
+  TORCH_CHECK(self.scalar_type() == result.scalar_type(),
+      "cpu_cumsum_lastdim_kernel: expect same data type for self and result");
+
+  if (result.sizes() != self.sizes()) {
+    result.resize_as_(self);
+  }
+  if (self.numel() == 0) {
+    return;
+  }
+  if (input_ndim == 0) {
+    result.fill_(self);
+    return;
+  }
+
+  int64_t N = self.size(dim);
+  int64_t M = self.numel() / N;
+  const scalar_t* self_data = self.data_ptr<scalar_t>();
+  scalar_t* result_data = result.data_ptr<scalar_t>();
+
+  constexpr int64_t CHUNK_SIZE = 2048;
+  int64_t K = divup(N, CHUNK_SIZE);
+
+  // path I: do accumulate per segment
+  at::parallel_for(0, M * K, 1, [&](int64_t begin, int64_t end) {
+    for (int64_t i = begin; i < end; i++) {
+      int64_t m = i / K;
+      int64_t k = i % K;
+      int64_t k_begin = k * CHUNK_SIZE;
+      int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
+      int64_t len = k_end - k_begin;
+
+      const scalar_t* self_ptr = self_data + m * N  + k_begin;
+      scalar_t* result_ptr = result_data + m * N + k_begin;
+      prefix_sum<scalar_t>(self_ptr, result_ptr, scalar_t(0), len);
+    }
+  });
+
+  // path II: update offset for each segment
+  std::vector<scalar_t> offsets(M * K);
+  at::parallel_for(0, M, 1, [&](int64_t begin, int64_t end) {
+    for (int64_t m = begin; m < end; m++) {
+      scalar_t* result_ptr = result_data + m * N;
+      scalar_t offset = K > 1 ? result_ptr[CHUNK_SIZE - 1] : 0;
+      for (int64_t k = 1; k < K; k++) {
+        int64_t k_begin = k * CHUNK_SIZE;
+        int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
+        offsets[m * K + k] = offset;
+        offset += result_ptr[k_end - 1];
+      }
+    }
+  });
+
+  // path III: apply the offset
+  using Vec = Vec256<scalar_t>;
+  at::parallel_for(0, M * K, 1, [&](int64_t begin, int64_t end) {
+    for (int64_t i = begin; i < end; i++) {
+      int64_t m = i / K;
+      int64_t k = i % K;
+      int64_t k_begin = k * CHUNK_SIZE;
+      int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
+      int64_t len = k_end - k_begin;
+
+      // we can skip k=0
+      if (k != 0) {
+        scalar_t* result_ptr = result_data + m * N + k_begin;
+        scalar_t offset = offsets[m * K + k];
+        vec256::map<scalar_t>(
+            [offset](Vec x) { return x + Vec(offset); },
+            result_ptr,
+            result_ptr,
+            len);
+      }
+    }
+  });
+}
 
 template <typename scalar_t, typename func_t>
 static inline void cpu_cum_base_kernel(Tensor& result,
@@ -67,6 +152,16 @@ static inline void cpu_cum_base_kernel(Tensor& result,
 static void cumsum_cpu_kernel(Tensor& result, const Tensor& self, int64_t dim) {
   auto wrap_dim = maybe_wrap_dim(dim, self.dim());
   int64_t self_dim_size = ensure_nonempty_size(self, wrap_dim);
+
+  auto dtype = self.scalar_type();
+  bool is_contig = self.is_contiguous() && result.is_contiguous();
+  bool is_dtype_enabled = dtype == ScalarType::Double || dtype == ScalarType::Float || dtype == ScalarType::Long;
+  if ((wrap_dim == self.dim() - 1) && is_contig && is_dtype_enabled) {
+    AT_DISPATCH_FLOATING_TYPES_AND(ScalarType::Long, self.scalar_type(), "cumsum_lastdim_cpu", [&] {
+      cpu_cumsum_lastdim_kernel<scalar_t>(result, self, wrap_dim);
+    });
+    return;
+  }
 
   AT_DISPATCH_ALL_TYPES_AND_COMPLEX(self.scalar_type(), "cumsum_out_cpu", [&] {
     cpu_cum_base_kernel<scalar_t>(result, self, wrap_dim, [&] (

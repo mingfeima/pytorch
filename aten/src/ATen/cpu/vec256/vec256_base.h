@@ -894,4 +894,13 @@ inline void convert(const src_T *src, dst_T *dst, int64_t n) {
   }
 }
 
+template <typename T>
+inline void prefix_sum(const T *src, T *dst, T init, int64_t n) {
+  T sum = init;
+  for (int64_t i = 0; i < n; i++) {
+    sum += src[i];
+    dst[i] = sum;
+  }
+}
+
 }}}
