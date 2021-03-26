@@ -1190,40 +1190,40 @@ namespace {
       auto max = [](auto& x, auto& y) { return at::vec256::maximum(x, y); };
       // ReduceAll
       for (int64_t len = 1; len <= N; len++) {
-        auto y1 = at::vec256::ReduceAll<RT>::apply(sum, x_f1, len);
-        auto y2 = at::vec256::ReduceAll<VT>::apply(sum, x_b1, len);
+        auto y1 = at::vec256::reduce_all<RT>(sum, x_f1, len);
+        auto y2 = at::vec256::reduce_all<VT>(sum, x_b1, len);
         ASSERT_TRUE(cmp(y1, y2)) << "Failure Details:\nTest Seed to reproduce: " << seed
-            << "\nReduceAll, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
+            << "\nreduce_all, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
       }
       // Reduce2All
       for (int64_t len = 1; len <= N; len++) {
-        auto y1 = at::vec256::Reduce2All<RT>::apply(sum, max, x_f1, len);
-        auto y2 = at::vec256::Reduce2All<VT>::apply(sum, max, x_b1, len);
+        auto y1 = at::vec256::reduce2_all<RT>(sum, max, x_f1, len);
+        auto y2 = at::vec256::reduce2_all<VT>(sum, max, x_b1, len);
         ASSERT_TRUE(cmp(y1.first, y2.first) && cmp(y1.second, y2.second)) << "Failure Details:\nTest Seed to reproduce: " << seed
-            << "\nReduce2All, Length: " << len << "; fp32(fun1): " << y1.first << "; bf16(fun1): " << RT(y2.first)
+            << "\nreduce2_all, Length: " << len << "; fp32(fun1): " << y1.first << "; bf16(fun1): " << RT(y2.first)
             << "; fp32(fun2): " << y1.second << "; bf16(fun2): " << y2.second;
       }
       // MapReduceAll
       for (int64_t len = 1; len <= N; len++) {
-        auto y1 = at::vec256::MapReduceAll<RT>::apply([](auto x) { return x - x.exp(); }, sum, x_f1, len);
-        auto y2 = at::vec256::MapReduceAll<VT>::apply([](auto x) { return x - x.exp(); }, sum, x_b1, len);
+        auto y1 = at::vec256::map_reduce_all<RT>([](auto x) { return x - x.exp(); }, sum, x_f1, len);
+        auto y2 = at::vec256::map_reduce_all<VT>([](auto x) { return x - x.exp(); }, sum, x_b1, len);
         ASSERT_TRUE(cmp(y1, y2)) << "Failure Details:\nTest Seed to reproduce: " << seed
-            << "\nMapReduceAll, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
+            << "\nmap_reduce_all, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
 
       }
       // Map2ReduceAll
       for (int64_t len = 1; len <= N; len++) {
-        auto y1 = at::vec256::Map2ReduceAll<RT>::apply([](auto x, auto y) { return x * y; }, sum, x_f1, x_f2, len);
-        auto y2 = at::vec256::Map2ReduceAll<VT>::apply([](auto x, auto y) { return x * y; }, sum, x_b1, x_b2, len);
+        auto y1 = at::vec256::map2_reduce_all<RT>([](auto x, auto y) { return x * y; }, sum, x_f1, x_f2, len);
+        auto y2 = at::vec256::map2_reduce_all<VT>([](auto x, auto y) { return x * y; }, sum, x_b1, x_b2, len);
         ASSERT_TRUE(cmp(y1, y2)) << "Failure Details:\nTest Seed to reproduce: " << seed
-            << "\nMap2ReduceAll, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
+            << "\nmap2_reduce_all, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
       }
       // Map3ReduceAll
       for (int64_t len = 1; len <= N; len++) {
-        auto y1 = at::vec256::Map3ReduceAll<RT>::apply([](auto x, auto y, auto z) { return x * y + z; }, sum, x_f1, x_f2, x_f3, len);
-        auto y2 = at::vec256::Map3ReduceAll<VT>::apply([](auto x, auto y, auto z) { return x * y + z; }, sum, x_b1, x_b2, x_b3, len);
+        auto y1 = at::vec256::map3_reduce_all<RT>([](auto x, auto y, auto z) { return x * y + z; }, sum, x_f1, x_f2, x_f3, len);
+        auto y2 = at::vec256::map3_reduce_all<VT>([](auto x, auto y, auto z) { return x * y + z; }, sum, x_b1, x_b2, x_b3, len);
         ASSERT_TRUE(cmp(y1, y2)) << "Failure Details:\nTest Seed to reproduce: " << seed
-            << "\nMap3ReduceAll, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
+            << "\nmap3_reduce_all, Length: " << len << "; fp32: " << y1 << "; bf16: " << RT(y2);
       }
     }
     TYPED_TEST(FunctionalBF16Tests, Map) {
@@ -1255,29 +1255,29 @@ namespace {
       auto cmp = [=](RT ref, VT val) { return std::abs(ref - val) <= atol + rtol * std::abs(val); };
       // Map
       for (int64_t len = 1; len <= N; len++) {
-        at::vec256::Map<RT>::apply([](auto x) { return x; }, y_f, x_f1, len);
-        at::vec256::Map<VT>::apply([](auto x) { return x; }, y_b, x_b1, len);
+        at::vec256::map<RT>([](auto x) { return x; }, y_f, x_f1, len);
+        at::vec256::map<VT>([](auto x) { return x; }, y_b, x_b1, len);
         for (int64_t i = 0; i < len; i++) {
           ASSERT_TRUE(cmp(y_f[i], y_b[i])) << "Failure Details:\nTest Seed to reproduce: " << seed
-              << "\nMap, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
+              << "\nmap, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
         }
       }
       // Map2
       for (int64_t len = 1; len <= N; len++) {
-        at::vec256::Map2<RT>::apply([](auto x, auto y) { return x + y; }, y_f, x_f1, x_f2, len);
-        at::vec256::Map2<VT>::apply([](auto x, auto y) { return x + y; }, y_b, x_b1, x_b2, len);
+        at::vec256::map2<RT>([](auto x, auto y) { return x + y; }, y_f, x_f1, x_f2, len);
+        at::vec256::map2<VT>([](auto x, auto y) { return x + y; }, y_b, x_b1, x_b2, len);
         for (int64_t i = 0; i < len; i++) {
           ASSERT_TRUE(cmp(y_f[i], y_b[i])) << "Failure Details:\nTest Seed to reproduce: " << seed
-              << "\nMap2, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
+              << "\nmap2, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
         }
       }
       // Map3
       for (int64_t len = 1; len <= N; len++) {
-        at::vec256::Map3<RT>::apply([](auto x, auto y, auto z) { return x + y * z; }, y_f, x_f1, x_f2, x_f3, len);
-        at::vec256::Map3<VT>::apply([](auto x, auto y, auto z) { return x + y * z; }, y_b, x_b1, x_b2, x_b3, len);
+        at::vec256::map3<RT>([](auto x, auto y, auto z) { return x + y * z; }, y_f, x_f1, x_f2, x_f3, len);
+        at::vec256::map3<VT>([](auto x, auto y, auto z) { return x + y * z; }, y_b, x_b1, x_b2, x_b3, len);
         for (int64_t i = 0; i < len; i++) {
           ASSERT_TRUE(cmp(y_f[i], y_b[i])) << "Failure Details:\nTest Seed to reproduce: " << seed
-              << "\nMap3, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
+              << "\nmap3, Length: " << len << "; index: " << i << "; fp32 reference: " << y_f[i] << "; bf16 value: " << RT(y_b[i]);
         }
       }
     }
