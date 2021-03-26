@@ -27,8 +27,7 @@ inline scalar_t vec_reduce_all(
 }
 
 template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, scalar_t>
-reduce_all(const Op& vec_fun, const scalar_t* data, int64_t size) {
+inline scalar_t reduce_all(const Op& vec_fun, const scalar_t* data, int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size())
     return vec_reduce_all(vec_fun, Vec::loadu(data, size), size);
@@ -47,8 +46,7 @@ reduce_all(const Op& vec_fun, const scalar_t* data, int64_t size) {
 
 // similar to reduce_all, but reduces into two outputs
 template <typename scalar_t, typename Op1, typename Op2>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, std::pair<scalar_t, scalar_t>>
-reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
+inline std::pair<scalar_t, scalar_t> reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
     const scalar_t* data, int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size()) {
@@ -76,9 +74,11 @@ reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
 }
 
 template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, int64_t size) {
+inline scalar_t map_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const scalar_t* data,
+    int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size())
     return vec_reduce_all(red_fun, map_fun(Vec::loadu(data, size)), size);
@@ -98,9 +98,12 @@ map_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
 }
 
 template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map2_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, const scalar_t* data2, int64_t size) {
+inline scalar_t map2_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const scalar_t* data,
+    const scalar_t* data2,
+    int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size()) {
     Vec data_vec = Vec::loadu(data, size);
@@ -126,9 +129,13 @@ map2_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
 }
 
 template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map3_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, const scalar_t* data2, const scalar_t* data3, int64_t size) {
+inline scalar_t map3_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const scalar_t* data,
+    const scalar_t* data2,
+    const scalar_t* data3,
+    int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   if (size < Vec::size()) {
     Vec data_vec = Vec::loadu(data, size);
@@ -158,8 +165,11 @@ map3_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
 }
 
 template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, void>
-map(const Op& vec_fun, scalar_t* output_data, const scalar_t* input_data, int64_t size) {
+inline void map(
+    const Op& vec_fun,
+    scalar_t* output_data,
+    const scalar_t* input_data,
+    int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   int64_t d = 0;
   for (; d < size - (size % Vec::size()); d += Vec::size()) {
@@ -173,9 +183,12 @@ map(const Op& vec_fun, scalar_t* output_data, const scalar_t* input_data, int64_
 }
 
 template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, void>
-map2(const Op& vec_fun, scalar_t* output_data,
-    const scalar_t* input_data, const scalar_t* input_data2, int64_t size) {
+inline void map2(
+    const Op& vec_fun,
+    scalar_t* output_data,
+    const scalar_t* input_data,
+    const scalar_t* input_data2,
+    int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   int64_t d = 0;
   for (; d < size - (size % Vec::size()); d += Vec::size()) {
@@ -193,9 +206,12 @@ map2(const Op& vec_fun, scalar_t* output_data,
 }
 
 template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<!std::is_same<scalar_t, BFloat16>::value, void>
-map3(const Op& vec_fun, scalar_t* output_data,
-    const scalar_t* input_data1, const scalar_t* input_data2, const scalar_t* input_data3,
+inline void map3(
+    const Op& vec_fun,
+    scalar_t* output_data,
+    const scalar_t* input_data1,
+    const scalar_t* input_data2,
+    const scalar_t* input_data3,
     int64_t size) {
   using Vec = vec256::Vec256<scalar_t>;
   int64_t d = 0;
@@ -245,9 +261,9 @@ using vec_scalar_t = typename VecScalarType<scalar_t>::type;
 //  If you plan to extend this file, make sure add unit test at
 //    aten/src/ATen/test/vec256_test_all_types.cpp
 //
-template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, scalar_t>
-reduce_all(const Op& vec_fun, const scalar_t* data, int64_t size) {
+template <typename scalar_t = BFloat16, typename Op>
+//inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, scalar_t>
+inline BFloat16 reduce_all(const Op& vec_fun, const BFloat16* data, int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   if (size < bVec::size()) {
@@ -287,10 +303,9 @@ reduce_all(const Op& vec_fun, const scalar_t* data, int64_t size) {
   return vec_reduce_all<float>(vec_fun, acc_fvec0, fVec::size());
 }
 
-template <typename scalar_t, typename Op1, typename Op2>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, std::pair<scalar_t, scalar_t>>
-reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
-    const scalar_t* data, int64_t size) {
+template <typename scalar_t = BFloat16, typename Op1, typename Op2>
+inline std::pair<BFloat16, BFloat16> reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
+    const BFloat16* data, int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   if (size < bVec::size()) {
@@ -345,10 +360,12 @@ reduce2_all(const Op1& vec_fun1, const Op2& vec_fun2,
       vec_reduce_all<float>(vec_fun2, acc2_fvec0, fVec::size()));
 }
 
-template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, int64_t size) {
+template <typename scalar_t = BFloat16, typename MapOp, typename ReduceOp>
+inline BFloat16 map_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const BFloat16* data,
+    int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   if (size < bVec::size()) {
@@ -398,10 +415,13 @@ map_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
   return vec_reduce_all<float>(red_fun, acc_fvec0, fVec::size());
 }
 
-template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map2_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, const scalar_t* data2, int64_t size) {
+template <typename scalar_t = BFloat16, typename MapOp, typename ReduceOp>
+inline BFloat16 map2_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const BFloat16* data,
+    const BFloat16* data2,
+    int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   if (size < bVec::size()) {
@@ -463,10 +483,14 @@ map2_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
   return vec_reduce_all<float>(red_fun, acc_fvec0, fVec::size());
 }
 
-template <typename scalar_t, typename MapOp, typename ReduceOp>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, scalar_t>
-map3_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
-    const scalar_t* data, const scalar_t* data2, const scalar_t* data3, int64_t size) {
+template <typename scalar_t = BFloat16, typename MapOp, typename ReduceOp>
+inline BFloat16 map3_reduce_all(
+    const MapOp& map_fun,
+    const ReduceOp& red_fun,
+    const BFloat16* data,
+    const BFloat16* data2,
+    const BFloat16* data3,
+    int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   if (size < bVec::size()) {
@@ -540,9 +564,12 @@ map3_reduce_all(const MapOp& map_fun, const ReduceOp& red_fun,
   return vec_reduce_all<float>(red_fun, acc_fvec0, fVec::size());
 }
 
-template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, void>
-map(const Op& vec_fun, scalar_t* output_data, const scalar_t* input_data, int64_t size) {
+template <typename scalar_t = BFloat16, typename Op>
+inline void map(
+    const Op& vec_fun,
+    BFloat16* output_data,
+    const BFloat16* input_data,
+    int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   int64_t d = 0;
@@ -566,10 +593,13 @@ map(const Op& vec_fun, scalar_t* output_data, const scalar_t* input_data, int64_
   }
 }
 
-template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, void>
-map2(const Op& vec_fun, scalar_t* output_data,
-    const scalar_t* input_data, const scalar_t* input_data2, int64_t size) {
+template <typename scalar_t = BFloat16, typename Op>
+inline void map2(
+    const Op& vec_fun,
+    BFloat16* output_data,
+    const BFloat16* input_data,
+    const BFloat16* input_data2,
+    int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
   int64_t d = 0;
@@ -599,10 +629,13 @@ map2(const Op& vec_fun, scalar_t* output_data,
   }
 }
 
-template <typename scalar_t, typename Op>
-inline typename std::enable_if_t<std::is_same<scalar_t, BFloat16>::value, void>
-map3(const Op& vec_fun, scalar_t* output_data,
-    const scalar_t* input_data1, const scalar_t* input_data2, const scalar_t* input_data3,
+template <typename scalar_t = BFloat16, typename Op>
+inline void map3(
+    const Op& vec_fun,
+    BFloat16* output_data,
+    const BFloat16* input_data1,
+    const BFloat16* input_data2,
+    const BFloat16* input_data3,
     int64_t size) {
   using bVec = vec256::Vec256<BFloat16>;
   using fVec = vec256::Vec256<float>;
