@@ -82,7 +82,7 @@ static inline void cpu_cumsum_lastdim_kernel(
   // path III: apply the offset
   using Vec = Vec256<scalar_t>;
   at::parallel_for(0, M * K, 1, [&](int64_t begin, int64_t end) {
-    for (int64_t i = begin; i < end; i++) {
+    for (int64_t i = end-1; i >= begin; i--) {
       int64_t m = i / K;
       int64_t k = i % K;
       int64_t k_begin = k * CHUNK_SIZE;
