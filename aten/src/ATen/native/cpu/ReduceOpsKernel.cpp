@@ -46,61 +46,72 @@ static inline void cpu_cumsum_lastdim_kernel(
   const scalar_t* self_data = self.data_ptr<scalar_t>();
   scalar_t* result_data = result.data_ptr<scalar_t>();
 
-  constexpr int64_t CHUNK_SIZE = 2048;
+  int64_t T = at::get_num_threads();
+
+  // bytes per core for each chunk, set to 256KB (L2 cache reside)
+  constexpr int64_t CHUNK_SIZE_PER_CORE = 256 * 1024 / sizeof(scalar_t);
+  int64_t CHUNK_SIZE = std::max(1, CHUNK_SIZE_PER_CORE / M * T);
   int64_t K = divup(N, CHUNK_SIZE);
 
-  // path I: do accumulate per segment
-  at::parallel_for(0, M * K, 1, [&](int64_t begin, int64_t end) {
-    for (int64_t i = begin; i < end; i++) {
-      int64_t m = i / K;
-      int64_t k = i % K;
-      int64_t k_begin = k * CHUNK_SIZE;
-      int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
-      int64_t len = k_end - k_begin;
+  // offset value per chunk
+  std::vector<scalar_t> outer_offsets(M, scalar_t(0));
 
-      const scalar_t* self_ptr = self_data + m * N  + k_begin;
-      scalar_t* result_ptr = result_data + m * N + k_begin;
-      prefix_sum<scalar_t>(self_ptr, result_ptr, scalar_t(0), len);
-    }
-  });
+  // offset value per thread
+  std::vector<scalar_t> inner_offsets(M * T, scalar_t(0));
 
-  // path II: update offset for each segment
-  std::vector<scalar_t> offsets(M * K);
-  at::parallel_for(0, M, 1, [&](int64_t begin, int64_t end) {
-    for (int64_t m = begin; m < end; m++) {
-      scalar_t* result_ptr = result_data + m * N;
-      scalar_t offset = K > 1 ? result_ptr[CHUNK_SIZE - 1] : 0;
-      for (int64_t k = 1; k < K; k++) {
-        int64_t k_begin = k * CHUNK_SIZE;
-        int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
-        offsets[m * K + k] = offset;
-        offset += result_ptr[k_end - 1];
+  for (int64_t k = 0; k < K; k++) {
+    int64_t k_begin = k * CHUNK_SIZE;
+    int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
+
+    // Parallel Path I: accumulate locally per thread
+    at::parallel_for(k_begin, k_end, 1, [&](int64_t begin, int64_t end) {
+      int64_t tid = at::get_thread_num();
+      for (int64_t m = 0; m < M; m++) {
+        const scalar_t* self_ptr = self_data + m * N + begin;
+        scalar_t* result_ptr = result_data + m * N + begin;
+        int64_t len = end - begin;
+
+        prefix_sum<scalar_t>(self_ptr, result_ptr, scalar_t(0), len);
+        inner_offsets[m * T + tid] = result_ptr[len - 1];
+      }
+    });
+
+    // update offset value for each thread
+    for (int64_t m = 0; m < M; m++) {
+      for (int64_t t = T - 1; t >= 0; t--) {
+        scalar_t offset = scalar_t(0);
+        for (int64_t i = t - 1; i >= 0; i--) {
+          offset += inner_offsets[m * T + i];
+        }
+        inner_offsets[m * T + t] = offset;
       }
     }
-  });
 
-  // path III: apply the offset
-  using Vec = Vec256<scalar_t>;
-  at::parallel_for(0, M * K, 1, [&](int64_t begin, int64_t end) {
-    for (int64_t i = end-1; i >= begin; i--) {
-      int64_t m = i / K;
-      int64_t k = i % K;
-      int64_t k_begin = k * CHUNK_SIZE;
-      int64_t k_end = std::min(k_begin + CHUNK_SIZE, N);
-      int64_t len = k_end - k_begin;
+    // Parallel Path II: apply offset (result should be in L2)
+    at::parallel_for(k_begin, k_end, 1, [&](int64_t begin, int64_t end) {
+      int64_t tid = at::get_thread_num();
+      for (int64_t m = 0; m < M; m++) {
+        const scalar_t* self_ptr = self_data + m * N + begin;
+        scalar_t* result_ptr = result_data + m * N + begin;
+        int64_t len = end - begin;
 
-      // we can skip k=0
-      if (k != 0) {
-        scalar_t* result_ptr = result_data + m * N + k_begin;
-        scalar_t offset = offsets[m * K + k];
+        scalar_t offset = outer_offsets[m] + inner_offsets[m * T + tid];
         vec256::map<scalar_t>(
-            [offset](Vec x) { return x + Vec(offset); },
+            [=](Vec256<scalar_t> x) { return x + Vec256<scalar_t>(offset); },
             result_ptr,
             result_ptr,
             len);
       }
+    });
+
+    // reinit inner offset value
+    std::fill(inner_offsets.begin(), inner_offsets.end(), scalar_t(0));
+
+    // update outer offset value
+    for (int64_t m = 0; m < M; m++) {
+      outer_offsets[m] += result_data[m * N + k_end - 1];
     }
-  });
+  }
 }
 
 template <typename scalar_t, typename func_t>
