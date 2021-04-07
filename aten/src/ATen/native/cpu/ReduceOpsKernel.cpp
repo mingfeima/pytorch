@@ -91,7 +91,6 @@ static inline void cpu_cumsum_lastdim_kernel(
     at::parallel_for(k_begin, k_end, 1, [&](int64_t begin, int64_t end) {
       int64_t tid = at::get_thread_num();
       for (int64_t m = 0; m < M; m++) {
-        const scalar_t* self_ptr = self_data + m * N + begin;
         scalar_t* result_ptr = result_data + m * N + begin;
         int64_t len = end - begin;
 
@@ -109,7 +108,7 @@ static inline void cpu_cumsum_lastdim_kernel(
 
     // update outer offset value
     for (int64_t m = 0; m < M; m++) {
-      outer_offsets[m] += result_data[m * N + k_end - 1];
+      outer_offsets[m] = result_data[m * N + k_end - 1];
     }
   }
 }
