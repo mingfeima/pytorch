@@ -64,7 +64,7 @@ class Lamb(Optimizer):
             grads = []
             exp_avgs = []
             exp_avg_sqs = []
-            state_sums = []
+            trails = []
             state_steps = []
 
             for p in group['params']:
@@ -79,14 +79,23 @@ class Lamb(Optimizer):
                     state = self.state[p]
                     # Lazy state initialization
                     if len(state) == 0:
+                        use_split_sgd = p.dtype == torch.bfloat16 and group['fused']
                         state['step'] = 0
-                        # Exponential moving average of gradient values
-                        state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                        # Exponential moving average of squared gradient values
-                        state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                        if use_split_sgd:
+                            # Exponential moving average of gradient values
+                            state['exp_avg'] = torch.zeros_like(p, dtype=torch.float, memory_format=torch.preserve_format)
+                            # Exponential moving average of squared gradient values
+                            state['exp_avg_sq'] = torch.zeros_like(p, dtype=torch.float, memory_format=torch.preserve_format)
+                            # Lower 16 bits of master weight (stored as BFloat16)
+                            state['trail'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                        else:
+                            state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                            state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                            state['trail'] = torch.Tensor()
 
                     exp_avgs.append(state['exp_avg'])
                     exp_avg_sqs.append(state['exp_avg_sq'])
+                    trails.append(state['trail'])
 
                     # update the steps for each param group update
                     state['step'] += 1
@@ -98,6 +107,7 @@ class Lamb(Optimizer):
                    grads,
                    exp_avgs,
                    exp_avg_sqs,
+                   trails,
                    state_steps,
                    beta1,
                    beta2,

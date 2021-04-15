@@ -2626,12 +2626,12 @@
     CPU, CUDA: amin_out
 
 # Fused optimizer for LAMB
-- func: lamb_fused_step(Tensor param, Tensor exp_avg, Tensor exp_avg_sq, Tensor grad, int step, float beta1, float beta2, float learning_rate, float weight_decay, float eps) -> (Tensor, Tensor, Tensor)
+- func: lamb_fused_step(Tensor param, Tensor exp_avg, Tensor exp_avg_sq, Tensor grad, Tensor param2, int step, float beta1, float beta2, float learning_rate, float weight_decay, float eps) -> (Tensor, Tensor, Tensor)
   use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
   dispatch:
     CPU: lamb_fused_step_cpu
 
-- func: adagrad_fused_step(Tensor param, Tensor grad, Tensor state_sum, int step, float learning_rate, float weight_decay, float lr_decay, float eps) -> (Tensor, Tensor)
+- func: adagrad_fused_step(Tensor param, Tensor grad, Tensor state_sum, Tensor param2, int step, float learning_rate, float weight_decay, float lr_decay, float eps) -> (Tensor, Tensor)
   use_c10_dispatcher: hacky_wrapper_for_legacy_signatures
   dispatch:
     CPU: adagrad_fused_step_cpu

@@ -2036,5 +2036,64 @@ class TestSWAUtils(TestCase):
         self.assertEqual(dnn.bn.momentum, 0.3)
 
 
+class TestSplitSGD(TestCase):
+
+    def test_lamb_bfloat16_cpu(self):
+        fused = torch.lamb_fused_step
+
+        param = torch.randn(80, 100)
+        grad = torch.randn(80, 100)
+        exp_avg = torch.randn(80, 100).abs()
+        exp_avg_sq = torch.randn(80, 100).abs()
+        trail = torch.Tensor()
+
+        param2 = param.bfloat16()
+        grad2 = grad.bfloat16()
+        exp_avg2 = exp_avg.clone()
+        exp_avg_sq2 = exp_avg_sq.clone()
+        trail2 = torch.randn(80, 100).bfloat16()
+
+        step = 10
+        beta1 = 0.8
+        beta2 = 0.9
+        learning_rate = 0.1
+        weight_decay = 0.3
+        eps = 0.001
+
+        fused(param, exp_avg, exp_avg_sq, grad, trail, step, beta1, beta2, learning_rate, weight_decay, eps)
+        fused(param2, exp_avg2, exp_avg_sq2, grad2, trail2, step, beta1, beta2, learning_rate, weight_decay, eps)
+
+        self.assertEqual(param, param2.float(), atol=0.1, rtol=0)
+        #self.assertEqual(grad, grad2)
+        self.assertEqual(exp_avg, exp_avg2.float(), atol=0.1, rtol=0)
+        self.assertEqual(exp_avg_sq, exp_avg_sq2.float(), atol=0.1, rtol=0)
+
+    def test_adagrad_bfloat16_cpu(self):
+        fused = torch.adagrad_fused_step
+
+        param = torch.randn(80, 100)
+        grad = torch.randn(80, 100)
+        state_sum = torch.randn(80, 100).abs()
+        trail = torch.Tensor()
+
+        param2 = param.bfloat16()
+        grad2 = grad.bfloat16()
+        state_sum2 = state_sum.clone()
+        trail2 = torch.randn(80, 100).bfloat16()
+
+        step = 10
+        learning_rate = 0.1
+        weight_decay = 0.3
+        lr_decay = 0.01
+        eps = 0.001
+
+        fused(param, grad, state_sum, trail, step, learning_rate, weight_decay, lr_decay, eps)
+        fused(param2, grad2, state_sum2, trail2, step, learning_rate, weight_decay, lr_decay, eps)
+
+        self.assertEqual(param, param2.float(), atol=0.1, rtol=0)
+        self.assertEqual(state_sum, state_sum2.float(), atol=0.1, rtol=0)
+
+
+
 if __name__ == '__main__':
     run_tests()

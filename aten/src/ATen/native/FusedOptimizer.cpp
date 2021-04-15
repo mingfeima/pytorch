@@ -10,6 +10,7 @@ std::tuple<Tensor, Tensor, Tensor> lamb_fused_step_cpu(
     const Tensor& exp_avg_,
     const Tensor& exp_avg_sq_,
     const Tensor& grad_,
+    const Tensor& param2_,
     int64_t step,
     double beta1,
     double beta2,
@@ -37,13 +38,22 @@ std::tuple<Tensor, Tensor, Tensor> lamb_fused_step_cpu(
       "Expect param and exp_avg_sq_ have the same sizes, param sizes: ",
       param_.sizes(), "; exp_avg_sq sizes: ", exp_avg_sq_.sizes());
 
+  if (param_.scalar_type() == ScalarType::BFloat16) {
+    TORCH_CHECK(param_.sizes() == param2_.sizes(),
+        "Expect param and bfloat16 trail have the same sizes, param sizes: ",
+        param_.sizes(), "; bfloat16 trail sizes: ", param2_.sizes());
+  } else {
+    TORCH_CHECK(param2_.numel() == 0, "Expect bfloat16 trail to be empty");
+  }
+
   auto param = param_.contiguous();
   auto exp_avg = exp_avg_.contiguous();
   auto exp_avg_sq = exp_avg_sq_.contiguous();
   auto grad = grad_.contiguous();
+  auto param2 = param2_.contiguous();
 
   lamb_fused_step_kernel(
-      kCPU, param, exp_avg, exp_avg_sq, grad, step, beta1, beta2, learning_rate, weight_decay, eps);
+      kCPU, param, exp_avg, exp_avg_sq, grad, param2, step, beta1, beta2, learning_rate, weight_decay, eps);
 
   if (!param_.is_contiguous()) {
     param_.copy_(param);
@@ -54,6 +64,9 @@ std::tuple<Tensor, Tensor, Tensor> lamb_fused_step_cpu(
   if (!exp_avg_sq_.is_contiguous()) {
     exp_avg_sq_.copy_(exp_avg_sq);
   }
+  if (!param2_.is_contiguous()) {
+    param2_.copy_(param2);
+  }
 
   return std::make_tuple(param_, exp_avg_, exp_avg_sq_);
 }
@@ -62,6 +75,7 @@ std::tuple<Tensor, Tensor> adagrad_fused_step_cpu(
     const Tensor& param_,
     const Tensor& grad_,
     const Tensor& state_sum_,
+    const Tensor& param2_,
     int64_t step,
     double learning_rate,
     double weight_decay,
@@ -83,18 +97,30 @@ std::tuple<Tensor, Tensor> adagrad_fused_step_cpu(
       "Expect param and state_sum have the same sizes, param sizes: ",
       param_.sizes(), "; state_sum sizes: ", state_sum_.sizes());
 
+  if (param_.scalar_type() == ScalarType::BFloat16) {
+    TORCH_CHECK(param_.sizes() == param2_.sizes(),
+        "Expect param and bfloat16 trail have the same sizes, param sizes: ",
+        param_.sizes(), "; bfloat16 trail sizes: ", param2_.sizes());
+  } else {
+    TORCH_CHECK(param2_.numel() == 0, "Expect bfloat16 trail to be empty");
+  }
+
   auto param = param_.contiguous();
   auto grad = grad_.contiguous();
   auto state_sum = state_sum_.contiguous();
+  auto param2 = param2_.contiguous();
 
   adagrad_fused_step_kernel(
-      kCPU, param, grad, state_sum, step, learning_rate, weight_decay, lr_decay, eps);
+      kCPU, param, grad, state_sum, param2, step, learning_rate, weight_decay, lr_decay, eps);
 
   if (!param_.is_contiguous()) {
     param_.copy_(param);
   }
   if (!state_sum_.is_contiguous()) {
     state_sum_.copy_(state_sum);
+  }
+  if (!param2_.is_contiguous()) {
+    param2_.copy_(param2);
   }
 
   return std::make_tuple(param_, state_sum_);

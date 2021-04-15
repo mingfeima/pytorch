@@ -41,9 +41,15 @@ class Adagrad(Optimizer):
 
         for group in self.param_groups:
             for p in group['params']:
+                use_split_sgd = p.dtype == torch.bfloat16 and fused
                 state = self.state[p]
                 state['step'] = 0
-                state['sum'] = torch.full_like(p, initial_accumulator_value, memory_format=torch.preserve_format)
+                if use_split_sgd:
+                    state['sum'] = torch.full_like(p, initial_accumulator_value, dtype=torch.float, memory_format=torch.preserve_format)
+                    state['trail'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                else:
+                    state['sum'] = torch.full_like(p, initial_accumulator_value, memory_format=torch.preserve_format)
+                    state['trail'] = torch.Tensor()
 
     def __setstate__(self, state):
         super(Adagrad, self).__setstate__(state)
@@ -73,6 +79,7 @@ class Adagrad(Optimizer):
             params_with_grad = []
             grads = []
             state_sums = []
+            state_trails = []
             state_steps = []
 
             for p in group['params']:
@@ -81,6 +88,7 @@ class Adagrad(Optimizer):
                     grads.append(p.grad)
                     state = self.state[p]
                     state_sums.append(state['sum'])
+                    state_trails.append(state['trail'])
                     # update the steps for each param group update
                     state['step'] += 1
                     # record the step after step update
@@ -89,6 +97,7 @@ class Adagrad(Optimizer):
             F.adagrad(params_with_grad,
                       grads,
                       state_sums,
+                      state_trails,
                       state_steps,
                       group['lr'],
                       group['weight_decay'],

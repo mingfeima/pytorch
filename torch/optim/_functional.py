@@ -16,6 +16,7 @@ def _make_sparse(grad, grad_indices, values):
 def adagrad(params: List[Tensor],
             grads: List[Tensor],
             state_sums: List[Tensor],
+            state_trails: List[Tensor],
             state_steps: List[int],
             lr: float,
             weight_decay: float,
@@ -27,12 +28,13 @@ def adagrad(params: List[Tensor],
     See :class:`~torch.optim.Adagrad` for details.
     """
 
-    for (param, grad, state_sum, step) in zip(params, grads, state_sums, state_steps):
+    for (param, grad, state_sum, state_trail, step) in zip(params, grads, state_sums, state_trails, state_steps):
         if fused:
             torch.adagrad_fused_step(
                 param,
                 grad,
                 state_sum,
+                state_trail,
                 step,
                 lr,
                 weight_decay,
@@ -216,6 +218,7 @@ def lamb(params: List[Tensor],
          grads: List[Tensor],
          exp_avgs: List[Tensor],
          exp_avg_sqs: List[Tensor],
+         trails: List[Tensor],
          state_steps: List[int],
          beta1: float,
          beta2: float,
@@ -233,6 +236,7 @@ def lamb(params: List[Tensor],
         grad = grads[i]
         exp_avg = exp_avgs[i]
         exp_avg_sq = exp_avg_sqs[i]
+        trail = trails[i]
         step = state_steps[i]
 
         if fused:
@@ -240,7 +244,9 @@ def lamb(params: List[Tensor],
                 param,
                 exp_avg,
                 exp_avg_sq,
-                grad, step,
+                grad,
+                trail,
+                step,
                 beta1,
                 beta2,
                 lr,
