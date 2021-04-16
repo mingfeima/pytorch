@@ -155,7 +155,9 @@ class Optimizer(object):
             if isinstance(value, torch.Tensor):
                 # Floating-point types are a bit special here. They are the only ones
                 # that are assumed to always match the type of params.
-                if param.is_floating_point():
+
+                # For BFloat16 cases, states might be stored in float32
+                if param.is_floating_point() and param.dtype != torch.bfloat16:
                     value = value.to(param.dtype)
                 value = value.to(param.device)
                 return value
