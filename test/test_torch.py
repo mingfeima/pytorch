@@ -1225,6 +1225,25 @@ class AbstractTestCases:
                     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]))"""
             self.assertEqual(repr(a.max(1)), textwrap.dedent(expected).strip())
 
+        def test_offset_range_cpu(self):
+            def offset_range_ref(input, dtype=torch.int64):
+                out = []
+                for i in range(1, input.numel()):
+                    size = int(input[i] - input[i-1])
+                    out.append(torch.arange(size, dtype=dtype))
+
+                return torch.cat(out, dim=0)
+
+            for dtype in [torch.int32, torch.int64]:
+                seq_length = 10000
+                input, _ = torch.randint(100000, [seq_length]).sort()
+                input = input.to(dtype=dtype)
+
+                out = torch.offset_range(input)
+                out_ref = offset_range_ref(input, dtype=dtype)
+
+                self.assertEqual(out, out_ref)
+
         def test_is_same_size(self):
             t1 = torch.Tensor(3, 4, 9, 10)
             t2 = torch.Tensor(3, 4)

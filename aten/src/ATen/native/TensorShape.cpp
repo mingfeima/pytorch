@@ -6,6 +6,7 @@
 #include <ATen/NamedTensorUtils.h>
 #include <ATen/native/Copy.h>
 #include <ATen/native/cpu/CatKernel.h>
+#include <ATen/native/cpu/offset_range_kernel.h>
 #include <ATen/native/Resize.h>
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/TypeProperties.h>
@@ -30,6 +31,7 @@ namespace native {
 
 DEFINE_DISPATCH(cat_serial_stub);
 DEFINE_DISPATCH(stack_serial_stub);
+DEFINE_DISPATCH(offset_range_kernel);
 
 Tensor _reshape_from_tensor(const Tensor& self, const Tensor& shape_tensor) {
   TORCH_CHECK(shape_tensor.dim() == 1);
@@ -2301,6 +2303,19 @@ Tensor swapdims(const Tensor& self, int64_t dim0, int64_t dim1) {
 
 Tensor& swapdims_(Tensor& self, int64_t dim0, int64_t dim1) {
   return self.transpose_(dim0, dim1);
+}
+
+Tensor offset_range_cpu(const Tensor& self) {
+  TORCH_CHECK(self.scalar_type() == ScalarType::Int || self.scalar_type() == ScalarType::Long,
+      "offset_range: expect torch.int32 or torch.int64 input, got ", self.scalar_type());
+  TORCH_CHECK(self.numel() > 1, "offset_range: expect numel > 1, got ", self.numel());
+  TORCH_CHECK(self.ndimension() == 1, "offset_range: expect dim = 1, got ", self.ndimension());
+
+  auto input = self.contiguous();
+  auto output = at::empty({0}, input.options());
+
+  offset_range_kernel(kCPU, output, input);
+  return output;
 }
 
 }} // at::native

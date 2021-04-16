@@ -6011,6 +6011,11 @@
     CPU: legacy::cpu::_th_geqrf
     CUDA: legacy::cuda::_th_geqrf
 
+- func: offset_range(Tensor self) -> Tensor
+  variants: method, function
+  dispatch:
+    CPU: offset_range_cpu
+
 - func: orgqr.out(Tensor self, Tensor input2, *, Tensor(a!) out) -> Tensor(a!)
   dispatch:
     CPU: orgqr_out
